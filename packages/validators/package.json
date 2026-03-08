@@ -1,0 +1,22 @@
+{
+  "name": "@solarecoheat/validators",
+  "version": "1.0.0",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint src/",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.8.0",
+    "drizzle-kit": "0.31.9",
+    "fastify": "5.7.4",
+    "next": "14.2.35",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
+  }
+}

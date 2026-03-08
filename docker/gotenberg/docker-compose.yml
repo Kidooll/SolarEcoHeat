@@ -1,0 +1,11 @@
+services:
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: solarecoheat-gotenberg
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    command:
+      - "gotenberg"
+      - "--api-port=3000"
+      - "--chromium-disable-routes=false"

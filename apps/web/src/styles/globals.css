@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ── Backgrounds ─────────────────────────── */
+  --bg: #0e0f11;
+  --industrial-dark: #0e0f11;
+  --surface: #16181c;
+  --surface-2: #1e2128;
+  --surface-3: #252830;
+
+  /* ── Borders ─────────────────────────────── */
+  --border: #2a2d35;
+  --border-2: #363a45;
+
+  /* ── Texto ───────────────────────────────── */
+  --text: #e8eaf0;
+  --text-2: #9ca3af;
+  --text-3: #6b7280;
+
+  /* ── Marca (derivado da logo EcoHeat) ────── */
+  --brand: #3cb040;
+  --brand-dark: #2a7d2e;
+  --brand-bg: #071a08;
+  --brand-border: #1a5c1d;
+
+  /* ── Estado OK ───────────────────────────── */
+  --ok: #3cb040;
+  --ok-bg: #071a08;
+  --ok-border: #1a5c1d;
+  --ok-text: #4ade80;
+
+  /* ── Estado Atenção ──────────────────────── */
+  --warn: #f59e0b;
+  --warn-bg: #1c1107;
+  --warn-border: #92400e;
+  --warn-text: #fbbf24;
+
+  /* ── Estado Crítico ──────────────────────── */
+  --crit: #ef4444;
+  --crit-bg: #1c0505;
+  --crit-border: #991b1b;
+  --crit-text: #f87171;
+
+  /* ── Acento (ação secundária / link) ─────── */
+  --accent: #3b82f6;
+  --accent-bg: #0a1628;
+  --accent-border: #1e3a5f;
+
+  /* ── Utilitários ─────────────────────────── */
+  --radius: 4px;
+  --radius-lg: 6px;
+
+  --font-sans: 'IBM Plex Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* Acessibilidade: foco visível e consistente em toda a interface */
+:where(
+    a,
+    button,
+    [role="button"],
+    input,
+    select,
+    textarea,
+    summary
+  ):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Typography Helpers ───────────────────── */
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* ── Animations ───────────────────────────── */
+@keyframes blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.animate-blink {
+  animation: blink 1.2s step-end infinite;
+}
+
+/* ── Custom Utilities ─────────────────────── */
+.glass {
+  background: rgba(22, 24, 28, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Utilities adicionais do Guia */
+.interactive {
+  transition: all 0.15s ease;
+}
+
+.interactive:active {
+  background: var(--surface-3);
+  transform: scale(0.98);
+}
+
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

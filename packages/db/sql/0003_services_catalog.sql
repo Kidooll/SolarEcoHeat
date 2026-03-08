@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS services (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code varchar(20) NOT NULL UNIQUE,
+  name varchar(255) NOT NULL,
+  category varchar(30) NOT NULL,
+  short_description varchar(120) NOT NULL,
+  unit varchar(30) NOT NULL,
+  system_type varchar(30),
+  tags jsonb DEFAULT '[]'::jsonb NOT NULL,
+  full_description text,
+  internal_notes text,
+  sale_price numeric(12,2) DEFAULT 0 NOT NULL,
+  min_price numeric(12,2) DEFAULT 0 NOT NULL,
+  max_discount_percent integer DEFAULT 0 NOT NULL,
+  internal_cost numeric(12,2) DEFAULT 0 NOT NULL,
+  show_full_description boolean DEFAULT false NOT NULL,
+  default_quantity numeric(10,2) DEFAULT 1 NOT NULL,
+  allow_price_edit boolean DEFAULT true NOT NULL,
+  status varchar(20) DEFAULT 'active' NOT NULL,
+  created_at timestamp DEFAULT now() NOT NULL,
+  updated_at timestamp DEFAULT now() NOT NULL
+);

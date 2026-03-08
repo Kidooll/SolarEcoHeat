@@ -1,0 +1,175 @@
+"use client";
+
+import { useState, useEffect, useMemo } from "react";
+import { initDB, addToSyncQueue } from "@/utils/indexed-db";
+import { apiFetch } from "@/lib/api";
+
+export interface ComponentState {
+    id: string;
+    label: string;
+    sublabel: string;
+    status: "OK" | "ATN" | "CRT" | null;
+    observation: string;
+    photoUrl?: string;
+}
+
+export interface SystemState {
+    id: string;
+    name: string;
+    icon: string;
+    components: ComponentState[];
+}
+
+const getIconForType = (type: string) => {
+    const t = type.toLowerCase();
+    if (t.includes('solar')) return 'solar_power';
+    if (t.includes('bomba') || t.includes('hidro')) return 'water_drop';
+    if (t.includes('gás')) return 'mode_fan';
+    return 'settings_input_component';
+};
+
+export function useMaintenance(attendanceId: string) {
+    const [systems, setSystems] = useState<SystemState[]>([]);
+    const [unitName, setUnitName] = useState("Carregando...");
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                setLoading(true);
+                const db = await initDB();
+
+                // 1. Tentar recuperar do IndexedDB primeiro (Persistência Offline Local)
+                const localData = await db.get("attendances", attendanceId);
+                if (localData && localData.systems) {
+                    setSystems(localData.systems);
+                    setUnitName(localData.unitName || "Unidade Local");
+                    setLoading(false);
+                }
+
+                // 2. Se estiver online, buscar da API backend para garantir dados mais recentes
+                if (navigator.onLine) {
+                    const response = await apiFetch<{
+                        success: boolean;
+                        data: {
+                            attendance_id: string;
+                            unit_name: string;
+                            systems: Array<{
+                                id: string;
+                                name: string;
+                                type: string;
+                                components: Array<{
+                                    id: string;
+                                    type: string;
+                                    checklist: {
+                                        status?: "OK" | "ATN" | "CRT" | null;
+                                        observation?: string;
+                                        photoUrl?: string;
+                                    } | null;
+                                }>;
+                            }>;
+                        };
+                    }>(`/api/app/attendances/${attendanceId}/maintenance`);
+
+                    setUnitName(response.data.unit_name || "Unidade");
+
+                    const systemsWithComponents = response.data.systems.map((sys) => ({
+                        id: sys.id,
+                        name: sys.name,
+                        icon: getIconForType(sys.type),
+                        components: (sys.components || []).map((c) => ({
+                            id: c.id,
+                            label: c.type,
+                            sublabel: `ID: ${c.id.slice(0, 8).toUpperCase()}`,
+                            status: c.checklist?.status || null,
+                            observation: c.checklist?.observation || "",
+                            photoUrl: c.checklist?.photoUrl || "",
+                        })),
+                    }));
+
+                    setSystems(systemsWithComponents);
+
+                    // Salvar/Atualizar no IndexedDB para persistência offline
+                    await db.put("attendances", {
+                        id: attendanceId,
+                        systems: systemsWithComponents,
+                        unitName: response.data.unit_name,
+                        updatedAt: Date.now()
+                    });
+                }
+            } catch (err: any) {
+                console.error("Error in useMaintenance:", err);
+                setError(err.message);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+    }, [attendanceId]);
+
+    const updateComponent = async (systemId: string, componentId: string, updates: Partial<ComponentState>) => {
+        const newSystems = systems.map(sys => {
+            if (sys.id !== systemId) return sys;
+            return {
+                ...sys,
+                components: sys.components.map(comp => {
+                    if (comp.id !== componentId) return comp;
+                    return { ...comp, ...updates };
+                })
+            };
+        });
+
+        setSystems(newSystems);
+
+        // Persistir no IndexedDB imediatamente
+        const db = await initDB();
+        await db.put("attendances", {
+            id: attendanceId,
+            systems: newSystems,
+            unitName,
+            updatedAt: Date.now()
+        });
+
+        // Adicionar na fila de sincronização se o status, observação ou foto mudou
+        if (updates.status || updates.observation || updates.photoUrl) {
+            await addToSyncQueue({
+                type: "UPDATE",
+                entity: "attendance",
+                data: {
+                    attendanceId,
+                    systemId,
+                    componentId,
+                    ...updates
+                }
+            });
+        }
+    };
+
+    const overallProgress = useMemo(() => {
+        const allComponents = systems.flatMap(s => s.components);
+        if (allComponents.length === 0) return 0;
+        const completed = allComponents.filter(c => c.status !== null).length;
+        return Math.round((completed / allComponents.length) * 100);
+    }, [systems]);
+
+    const getSystemProgress = (systemId: string) => {
+        const sys = systems.find(s => s.id === systemId);
+        if (!sys || sys.components.length === 0) return 0;
+        const completed = sys.components.filter(c => c.status !== null).length;
+        return Math.round((completed / sys.components.length) * 100);
+    };
+
+    return {
+        systems,
+        unitName,
+        loading,
+        error,
+        overallProgress,
+        updateComponent,
+        getSystemProgress,
+        totalSystems: systems.length,
+        completedSystems: systems.filter(s => getSystemProgress(s.id) === 100).length
+    };
+}
