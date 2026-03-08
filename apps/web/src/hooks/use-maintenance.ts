@@ -17,6 +17,7 @@ export interface SystemState {
     id: string;
     name: string;
     icon: string;
+    locked?: boolean;
     components: ComponentState[];
 }
 
@@ -59,6 +60,7 @@ export function useMaintenance(attendanceId: string) {
                                 id: string;
                                 name: string;
                                 type: string;
+                                locked?: boolean;
                                 components: Array<{
                                     id: string;
                                     type: string;
@@ -78,6 +80,7 @@ export function useMaintenance(attendanceId: string) {
                         id: sys.id,
                         name: sys.name,
                         icon: getIconForType(sys.type),
+                        locked: !!sys.locked,
                         components: (sys.components || []).map((c) => ({
                             id: c.id,
                             label: c.type,
@@ -110,6 +113,11 @@ export function useMaintenance(attendanceId: string) {
     }, [attendanceId]);
 
     const updateComponent = async (systemId: string, componentId: string, updates: Partial<ComponentState>) => {
+        const targetSystem = systems.find((sys) => sys.id === systemId);
+        if (targetSystem?.locked) {
+            return;
+        }
+
         const newSystems = systems.map(sys => {
             if (sys.id !== systemId) return sys;
             return {
@@ -161,6 +169,45 @@ export function useMaintenance(attendanceId: string) {
         return Math.round((completed / sys.components.length) * 100);
     };
 
+    const lockSystem = async (systemId: string) => {
+        const targetSystem = systems.find((sys) => sys.id === systemId);
+        if (!targetSystem) return { ok: false as const, error: "Sistema não encontrado." };
+        if (targetSystem.locked) return { ok: true as const };
+
+        const checklistPayload = Object.fromEntries(
+            targetSystem.components.map((component) => [
+                component.id,
+                {
+                    status: component.status || undefined,
+                    observation: component.observation || "",
+                    photoUrl: component.photoUrl || "",
+                },
+            ]),
+        );
+
+        try {
+            await apiFetch(`/api/app/attendances/${attendanceId}/systems/${systemId}/lock`, {
+                method: "POST",
+                body: JSON.stringify({ checklist: checklistPayload }),
+            });
+
+            const newSystems = systems.map((sys) => (sys.id === systemId ? { ...sys, locked: true } : sys));
+            setSystems(newSystems);
+
+            const db = await initDB();
+            await db.put("attendances", {
+                id: attendanceId,
+                systems: newSystems,
+                unitName,
+                updatedAt: Date.now(),
+            });
+
+            return { ok: true as const };
+        } catch (err: any) {
+            return { ok: false as const, error: err?.message || "Erro ao finalizar sistema." };
+        }
+    };
+
     return {
         systems,
         unitName,
@@ -168,6 +215,7 @@ export function useMaintenance(attendanceId: string) {
         error,
         overallProgress,
         updateComponent,
+        lockSystem,
         getSystemProgress,
         totalSystems: systems.length,
         completedSystems: systems.filter(s => getSystemProgress(s.id) === 100).length

@@ -21,12 +21,15 @@ export default function AttendancePage() {
         error,
         overallProgress,
         updateComponent,
+        lockSystem,
         getSystemProgress,
         totalSystems,
         completedSystems
     } = useMaintenance(id);
 
     const [isOccurrenceOpen, setIsOccurrenceOpen] = useState(false);
+    const [lockError, setLockError] = useState<string | null>(null);
+    const [lockingSystemId, setLockingSystemId] = useState<string | null>(null);
     const [selectedSystemForOccurrence, setSelectedSystemForOccurrence] = useState<{
         id: string;
         label: string;
@@ -38,6 +41,16 @@ export default function AttendancePage() {
             label: systemName,
         });
         setIsOccurrenceOpen(true);
+    };
+
+    const handleLockSystem = async (systemId: string) => {
+        setLockError(null);
+        setLockingSystemId(systemId);
+        const result = await lockSystem(systemId);
+        if (!result.ok) {
+            setLockError(result.error);
+        }
+        setLockingSystemId(null);
     };
 
     if (loading) {
@@ -78,6 +91,11 @@ export default function AttendancePage() {
             />
 
             <main className="flex-1 flex flex-col gap-4 p-4 pb-24">
+                {lockError && (
+                    <div className="rounded border border-crit/40 bg-crit/10 px-3 py-2 text-xs font-mono text-crit">
+                        {lockError}
+                    </div>
+                )}
                 {/* Banner da Unidade */}
                 <div
                     className="bg-cover bg-center flex flex-col items-stretch justify-end rounded-xl overflow-hidden relative min-h-[160px] shadow-lg shadow-black/20 group"
@@ -120,6 +138,9 @@ export default function AttendancePage() {
                             title={system.name}
                             icon={system.icon}
                             progress={getSystemProgress(system.id)}
+                            locked={!!system.locked}
+                            locking={lockingSystemId === system.id}
+                            onFinalizeSystem={() => handleLockSystem(system.id)}
                             isInitialExpanded={idx === 0}
                         >
                             {system.components.map(comp => (
@@ -134,6 +155,7 @@ export default function AttendancePage() {
                                     onObservationChange={(observation) => updateComponent(system.id, comp.id, { observation })}
                                     onPhotoUpload={(photoUrl) => updateComponent(system.id, comp.id, { photoUrl })}
                                     onReport={() => handleReportOccurrence(system.id, `${system.name} - ${comp.label}`)}
+                                    readOnly={!!system.locked}
                                 />
                             ))}
                         </SystemSection>

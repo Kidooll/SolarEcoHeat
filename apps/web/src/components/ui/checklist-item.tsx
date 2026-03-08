@@ -14,6 +14,7 @@ interface ChecklistItemProps {
     onReport?: () => void;
     onPhotoUpload?: (url: string) => void;
     initialPhoto?: string;
+    readOnly?: boolean;
 }
 
 export function ChecklistItem({
@@ -26,7 +27,8 @@ export function ChecklistItem({
     initialObservation = "",
     onReport,
     onPhotoUpload,
-    initialPhoto = ""
+    initialPhoto = "",
+    readOnly = false,
 }: ChecklistItemProps) {
     const [status, setStatus] = useState<"OK" | "ATN" | "CRT" | null>(initialStatus);
     const [observation, setObservation] = useState(initialObservation);
@@ -45,6 +47,7 @@ export function ChecklistItem({
     };
 
     const handleStatusClick = (newStatus: "OK" | "ATN" | "CRT") => {
+        if (readOnly) return;
         setStatus(newStatus);
         onStatusChange?.(newStatus);
         if (newStatus === "OK") setIsExpanded(false);
@@ -83,28 +86,31 @@ export function ChecklistItem({
                     <div className="grid grid-cols-3 gap-2">
                         <button
                             onClick={() => handleStatusClick("OK")}
+                            disabled={readOnly}
                             className={`h-12 flex items-center justify-center rounded border-2 font-mono text-sm font-bold tracking-wide transition-all ${status === 'OK'
                                 ? 'border-primary bg-primary text-background-dark shadow-[0_0_12px_rgba(13,242,105,0.4)]'
                                 : 'border-border bg-surface text-text-2 hover:border-border-2'
-                                }`}
+                                } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                             [ OK ]
                         </button>
                         <button
                             onClick={() => handleStatusClick("ATN")}
+                            disabled={readOnly}
                             className={`h-12 flex items-center justify-center rounded border-2 font-mono text-sm font-bold tracking-wide transition-all ${status === 'ATN'
                                 ? 'border-warn bg-warn text-background-dark shadow-[0_0_12px_rgba(245,158,11,0.4)]'
                                 : 'border-border bg-surface text-text-2 hover:border-border-2'
-                                }`}
+                                } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                             [ ATN ]
                         </button>
                         <button
                             onClick={() => handleStatusClick("CRT")}
+                            disabled={readOnly}
                             className={`h-12 flex items-center justify-center rounded border-2 font-mono text-sm font-bold tracking-wide transition-all ${status === 'CRT'
                                 ? 'border-crit bg-crit text-white shadow-[0_0_12px_rgba(239,68,68,0.4)]'
                                 : 'border-border bg-surface text-text-2 hover:border-border-2'
-                                }`}
+                                } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                             [ CRT ]
                         </button>
@@ -116,6 +122,7 @@ export function ChecklistItem({
                             placeholder="Adicionar observação..."
                             type="text"
                             value={observation}
+                            disabled={readOnly}
                             onChange={(e) => {
                                 setObservation(e.target.value);
                                 onObservationChange?.(e.target.value);
@@ -123,7 +130,7 @@ export function ChecklistItem({
                         />
                         <button
                             onClick={handlePhotoCapture}
-                            disabled={isUploading}
+                            disabled={isUploading || readOnly}
                             className={`bg-surface-2 hover:bg-surface-3 text-text rounded px-3 flex items-center justify-center shrink-0 border border-border transition-all ${isUploading ? 'opacity-50 animate-pulse' : ''}`}
                         >
                             <span className="material-symbols-outlined">{isUploading ? 'sync' : 'camera_alt'}</span>
@@ -146,7 +153,7 @@ export function ChecklistItem({
                         </div>
                     )}
 
-                    {status === "CRT" && (
+                    {status === "CRT" && !readOnly && (
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();

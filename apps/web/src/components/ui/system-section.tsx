@@ -6,6 +6,9 @@ interface SystemSectionProps {
     title: string;
     icon: string;
     progress: number; // 0 to 100
+    locked?: boolean;
+    locking?: boolean;
+    onFinalizeSystem?: () => void;
     children: ReactNode;
     isInitialExpanded?: boolean;
 }
@@ -14,6 +17,9 @@ export function SystemSection({
     title,
     icon,
     progress,
+    locked = false,
+    locking = false,
+    onFinalizeSystem,
     children,
     isInitialExpanded = false
 }: SystemSectionProps) {
@@ -52,11 +58,12 @@ export function SystemSection({
                     {children}
                     <div className="p-4 bg-surface-lighter/50 border-t border-primary/10 flex flex-col gap-3">
                         <button
-                            disabled={progress < 100}
+                            onClick={onFinalizeSystem}
+                            disabled={progress < 100 || locked || locking}
                             className="w-full h-12 rounded-lg bg-primary hover:bg-primary-dark text-background-dark font-bold text-sm tracking-wide shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2 border border-primary-dark disabled:opacity-30 disabled:grayscale"
                         >
                             <span className="material-symbols-outlined">check_circle</span>
-                            FINALIZAR SISTEMA
+                            {locked ? "SISTEMA FINALIZADO" : locking ? "FINALIZANDO..." : "FINALIZAR SISTEMA"}
                         </button>
                     </div>
                 </div>

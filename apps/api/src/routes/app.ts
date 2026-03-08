@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from "fastify";
 import {
+  and,
   auditLogs,
   attendances,
   clients,
@@ -518,8 +519,10 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
             .where(eq(systems.unitId, attendanceRow.unitId)),
           db
             .select({
+              id: systemMaintenances.id,
               systemId: systemMaintenances.systemId,
               checklist: systemMaintenances.checklist,
+              locked: systemMaintenances.locked,
             })
             .from(systemMaintenances)
             .where(eq(systemMaintenances.attendanceId, id)),
@@ -551,11 +554,13 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
 
         const data = systemsRows.map((systemRow) => {
           const checklist = maintenanceMap.get(systemRow.id) || {};
+          const maintenanceRow = maintenanceRows.find((row) => row.systemId === systemRow.id);
           const systemComponents = componentsBySystem.get(systemRow.id) || [];
           return {
             id: systemRow.id,
             name: systemRow.name,
             type: systemRow.type,
+            locked: !!maintenanceRow?.locked,
             components: systemComponents.map((component) => ({
               id: component.id,
               type: component.type,
@@ -576,6 +581,206 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       } catch (error) {
         fastify.log.error({ error }, "Falha ao carregar dados de manutenção");
         return reply.code(500).send({ success: false, error: "Erro ao carregar manutenção." });
+      }
+    },
+  );
+
+  fastify.post(
+    "/attendances/:id/systems/:systemId/lock",
+    { preValidation: [fastify.authenticate] },
+    async (request, reply) => {
+      if (!request.user) return;
+      const role = getUserRole(request.user);
+      if (role !== "technician" && role !== "admin") {
+        return reply.code(403).send({ success: false, error: "Acesso permitido apenas para equipe técnica." });
+      }
+
+      const actorUserId = getActorUserId(request);
+      if (!actorUserId) {
+        return reply.code(401).send({ success: false, error: "Usuário autenticado inválido." });
+      }
+
+      const { id, systemId } = request.params as { id: string; systemId: string };
+      const body = request.body as {
+        checklist?: Record<string, { status?: "OK" | "ATN" | "CRT"; observation?: string; photoUrl?: string }>;
+      };
+
+      try {
+        const [attendanceRow] = await db
+          .select({
+            id: attendances.id,
+            unitId: attendances.unitId,
+            technicianId: attendances.technicianId,
+            status: attendances.status,
+            updatedAt: attendances.updatedAt,
+          })
+          .from(attendances)
+          .where(eq(attendances.id, id))
+          .limit(1);
+
+        if (!attendanceRow) {
+          return reply.code(404).send({ success: false, error: "Atendimento não encontrado." });
+        }
+
+        if (role === "technician" && attendanceRow.technicianId !== request.user.id) {
+          return reply.code(403).send({ success: false, error: "Atendimento não pertence ao técnico logado." });
+        }
+
+        if ((attendanceRow.status || "").toLowerCase() === "finalizado") {
+          return reply.code(409).send({ success: false, error: "Atendimento finalizado não pode ser alterado." });
+        }
+
+        const [systemRow] = await db
+          .select({
+            id: systems.id,
+            unitId: systems.unitId,
+            stateDerived: systems.stateDerived,
+          })
+          .from(systems)
+          .where(eq(systems.id, systemId))
+          .limit(1);
+
+        if (!systemRow || systemRow.unitId !== attendanceRow.unitId) {
+          return reply.code(400).send({ success: false, error: "Sistema inválido para este atendimento." });
+        }
+
+        const componentRows = await db
+          .select({ id: components.id })
+          .from(components)
+          .where(eq(components.systemId, systemId));
+
+        const [maintenanceRow] = await db
+          .select({
+            id: systemMaintenances.id,
+            checklist: systemMaintenances.checklist,
+            locked: systemMaintenances.locked,
+            finalState: systemMaintenances.finalState,
+            updatedAt: systemMaintenances.updatedAt,
+          })
+          .from(systemMaintenances)
+          .where(and(eq(systemMaintenances.attendanceId, id), eq(systemMaintenances.systemId, systemId)))
+          .limit(1);
+
+        if (maintenanceRow?.locked) {
+          return reply.send({
+            success: true,
+            data: {
+              attendanceId: id,
+              systemId,
+              locked: true,
+              finalState: maintenanceRow.finalState || deriveSystemFinalState((maintenanceRow.checklist || {}) as Record<string, unknown>),
+            },
+          });
+        }
+
+        const baseChecklist =
+          maintenanceRow?.checklist && typeof maintenanceRow.checklist === "object" && !Array.isArray(maintenanceRow.checklist)
+            ? ({ ...(maintenanceRow.checklist as Record<string, any>) } as Record<string, any>)
+            : {};
+
+        const payloadChecklist =
+          body?.checklist && typeof body.checklist === "object" && !Array.isArray(body.checklist)
+            ? body.checklist
+            : {};
+
+        for (const [componentId, entry] of Object.entries(payloadChecklist)) {
+          if (!baseChecklist[componentId] || typeof baseChecklist[componentId] !== "object") {
+            baseChecklist[componentId] = {};
+          }
+          if (entry?.status !== undefined) baseChecklist[componentId].status = entry.status;
+          if (entry?.observation !== undefined) baseChecklist[componentId].observation = entry.observation;
+          if (entry?.photoUrl !== undefined) baseChecklist[componentId].photoUrl = entry.photoUrl;
+        }
+
+        const pendingComponents = componentRows.filter((component) => {
+          const status = componentChecklistStatus(baseChecklist[component.id]);
+          return !status;
+        });
+
+        if (pendingComponents.length > 0) {
+          return reply.code(400).send({
+            success: false,
+            error: "Existem componentes sem checklist preenchido neste sistema.",
+            pendingComponents: pendingComponents.length,
+          });
+        }
+
+        const finalState = deriveSystemFinalState(baseChecklist);
+        const now = new Date();
+
+        const [savedMaintenance] = maintenanceRow
+          ? await db
+              .update(systemMaintenances)
+              .set({
+                checklist: baseChecklist,
+                locked: true,
+                finalState,
+                updatedAt: now,
+              })
+              .where(eq(systemMaintenances.id, maintenanceRow.id))
+              .returning({
+                id: systemMaintenances.id,
+                locked: systemMaintenances.locked,
+                finalState: systemMaintenances.finalState,
+                updatedAt: systemMaintenances.updatedAt,
+              })
+          : await db
+              .insert(systemMaintenances)
+              .values({
+                attendanceId: id,
+                systemId,
+                checklist: baseChecklist,
+                locked: true,
+                finalState,
+              })
+              .returning({
+                id: systemMaintenances.id,
+                locked: systemMaintenances.locked,
+                finalState: systemMaintenances.finalState,
+                updatedAt: systemMaintenances.updatedAt,
+              });
+
+        await db
+          .update(systems)
+          .set({
+            stateDerived: finalState,
+            updatedAt: now,
+          })
+          .where(eq(systems.id, systemId));
+
+        await db.insert(auditLogs).values({
+          tableName: "system_maintenances",
+          recordId: savedMaintenance.id,
+          action: maintenanceRow ? "UPDATE" : "INSERT",
+          oldData: maintenanceRow
+            ? {
+                locked: maintenanceRow.locked,
+                finalState: maintenanceRow.finalState,
+                updatedAt: maintenanceRow.updatedAt,
+              }
+            : null,
+          newData: {
+            attendanceId: id,
+            systemId,
+            locked: savedMaintenance.locked,
+            finalState: savedMaintenance.finalState,
+            updatedAt: savedMaintenance.updatedAt,
+          },
+          userId: actorUserId,
+        });
+
+        return reply.send({
+          success: true,
+          data: {
+            attendanceId: id,
+            systemId,
+            locked: savedMaintenance.locked,
+            finalState: savedMaintenance.finalState,
+          },
+        });
+      } catch (error) {
+        fastify.log.error({ error, attendanceId: id, systemId }, "Falha ao finalizar sistema.");
+        return reply.code(500).send({ success: false, error: "Erro ao finalizar sistema." });
       }
     },
   );
@@ -657,6 +862,21 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (!systemRow || systemRow.unitId !== attendanceRow.unitId) {
           return reply.code(400).send({ success: false, error: "Sistema inválido para este atendimento." });
+        }
+
+        const [maintenanceRow] = await db
+          .select({
+            locked: systemMaintenances.locked,
+          })
+          .from(systemMaintenances)
+          .where(and(eq(systemMaintenances.attendanceId, body.attendanceId), eq(systemMaintenances.systemId, body.systemId)))
+          .limit(1);
+
+        if (maintenanceRow?.locked) {
+          return reply.code(409).send({
+            success: false,
+            error: "Sistema já finalizado neste atendimento. Ocorrência bloqueada.",
+          });
         }
 
         const now = new Date();
@@ -822,6 +1042,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
               id: systemMaintenances.id,
               systemId: systemMaintenances.systemId,
               checklist: systemMaintenances.checklist,
+              locked: systemMaintenances.locked,
             })
             .from(systemMaintenances)
             .where(eq(systemMaintenances.attendanceId, attendanceRow.id)),
@@ -871,6 +1092,19 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
             success: false,
             error: "Existem componentes sem checklist preenchido.",
             pendingComponents,
+          });
+        }
+
+        const unlockedSystems = systemsRows.filter((systemRow) => {
+          const maintenance = maintenanceRows.find((row) => row.systemId === systemRow.id);
+          return !maintenance?.locked;
+        });
+
+        if (unlockedSystems.length > 0) {
+          return reply.code(400).send({
+            success: false,
+            error: "Finalize todos os sistemas individualmente antes do encerramento global.",
+            pendingSystems: unlockedSystems.length,
           });
         }
 
