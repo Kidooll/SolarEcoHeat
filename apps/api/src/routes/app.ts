@@ -17,7 +17,7 @@ import {
 } from "@solarecoheat/db";
 import { getUserRole } from "../lib/auth";
 import {
-  enqueueCriticalOccurrenceAlert,
+  dispatchCriticalOccurrenceAlert,
   isCriticalAlertQueueEnabled,
 } from "../lib/critical-alert-queue";
 
@@ -924,7 +924,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (severity === "CRITICO") {
           try {
-            const queueResult = await enqueueCriticalOccurrenceAlert({
+            const dispatchResult = await dispatchCriticalOccurrenceAlert({
               occurrenceId: createdOccurrence.id,
               attendanceId: createdOccurrence.attendanceId,
               systemId: createdOccurrence.systemId,
@@ -934,14 +934,37 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
               actorUserId,
             });
 
-            if (!queueResult.queued) {
+            if (!dispatchResult.ok) {
+              await db.insert(auditLogs).values({
+                tableName: "critical_alerts",
+                recordId: createdOccurrence.id,
+                action: "INSERT",
+                oldData: null as any,
+                newData: {
+                  occurrenceId: createdOccurrence.id,
+                  dispatchOk: false,
+                  reason: dispatchResult.reason,
+                  error: dispatchResult.error || null,
+                } as any,
+                userId: actorUserId,
+              });
+
               fastify.log.warn(
                 {
                   occurrenceId: createdOccurrence.id,
-                  reason: queueResult.reason,
+                  reason: dispatchResult.reason,
+                  error: dispatchResult.error,
                   queueEnabled: isCriticalAlertQueueEnabled(),
                 },
-                "Ocorrência crítica criada sem enfileiramento de push.",
+                "Ocorrência crítica criada sem entrega de push.",
+              );
+            } else if (dispatchResult.mode === "direct_webhook") {
+              fastify.log.warn(
+                {
+                  occurrenceId: createdOccurrence.id,
+                  fallback: dispatchResult.fallback || "queue_unavailable",
+                },
+                "Push crítico entregue em fallback direto (sem fila).",
               );
             }
           } catch (error) {

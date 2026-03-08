@@ -24,6 +24,11 @@ import {
 } from "@solarecoheat/db";
 import { adminCreateQuoteSchema, adminQuoteStatusSchema } from "@solarecoheat/validators";
 import { ensureAdmin } from "../lib/auth";
+import {
+  getCriticalAlertQueueStatus,
+  listCriticalAlertFailedJobs,
+  retryCriticalAlertJob,
+} from "../lib/critical-alert-queue";
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   function getActorUserId(request: any) {
@@ -178,6 +183,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (normalized === "finalizado") return "finalizado";
     if (normalized === "cancelado") return "cancelado";
     return null;
+  }
+
+  function hasScheduleConflict(base: Date, candidate: Date, windowMinutes = 120) {
+    const diff = Math.abs(candidate.getTime() - base.getTime());
+    return diff <= windowMinutes * 60 * 1000;
   }
 
   async function ensureQuoteIncomeCategory(tx: typeof db) {
@@ -880,6 +890,27 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/ops/critical-alerts/status", async () => {
+    const status = await getCriticalAlertQueueStatus();
+    return { success: true, data: status };
+  });
+
+  fastify.get("/ops/critical-alerts/failed", async (request) => {
+    const query = request.query as { limit?: string | number };
+    const limit = Number(query.limit || 20);
+    const jobs = await listCriticalAlertFailedJobs(limit);
+    return { success: true, data: jobs };
+  });
+
+  fastify.post("/ops/critical-alerts/failed/:jobId/retry", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const result = await retryCriticalAlertJob(jobId);
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+    return { success: true, data: { jobId } };
+  });
+
   fastify.get("/audit-logs", async (request) => {
     const query = (request.query || {}) as {
       limit?: string;
@@ -1486,6 +1517,38 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: "Unidade inválida." });
     }
 
+    if (status === "agendado" || status === "em_andamento") {
+      const conflictRows = await db
+        .select({
+          id: attendances.id,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+          unitId: attendances.unitId,
+        })
+        .from(attendances)
+        .where(eq(attendances.technicianId, body.technicianId))
+        .orderBy(desc(attendances.startedAt))
+        .limit(200);
+
+      const conflict = conflictRows.find((row) => {
+        if (!row.startedAt) return false;
+        if (row.status !== "agendado" && row.status !== "em_andamento") return false;
+        return hasScheduleConflict(parsedDate, new Date(row.startedAt));
+      });
+
+      if (conflict) {
+        return reply.status(409).send({
+          error: "Conflito de agenda: técnico já possui atendimento próximo a este horário.",
+          conflict: {
+            attendanceId: conflict.id,
+            startedAt: conflict.startedAt,
+            status: conflict.status,
+            unitId: conflict.unitId,
+          },
+        });
+      }
+    }
+
     const [created] = await db
       .insert(attendances)
       .values({
@@ -1570,6 +1633,40 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
     if (!unitExists) {
       return reply.status(400).send({ error: "Unidade inválida." });
+    }
+
+    if (nextStatus === "agendado" || nextStatus === "em_andamento") {
+      const targetTechnicianId = body.technicianId || existing.technicianId;
+      const conflictRows = await db
+        .select({
+          id: attendances.id,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+          unitId: attendances.unitId,
+        })
+        .from(attendances)
+        .where(eq(attendances.technicianId, targetTechnicianId))
+        .orderBy(desc(attendances.startedAt))
+        .limit(200);
+
+      const conflict = conflictRows.find((row) => {
+        if (row.id === id) return false;
+        if (!row.startedAt) return false;
+        if (row.status !== "agendado" && row.status !== "em_andamento") return false;
+        return hasScheduleConflict(new Date(nextScheduledFor), new Date(row.startedAt));
+      });
+
+      if (conflict) {
+        return reply.status(409).send({
+          error: "Conflito de agenda: técnico já possui atendimento próximo a este horário.",
+          conflict: {
+            attendanceId: conflict.id,
+            startedAt: conflict.startedAt,
+            status: conflict.status,
+            unitId: conflict.unitId,
+          },
+        });
+      }
     }
 
     const [updated] = await db

@@ -31,6 +31,8 @@ const STATUS_OPTIONS = [
   { value: "cancelado", label: "Cancelado" },
 ];
 
+const WEEK_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
 function toInputDateTime(value: string | null | undefined) {
   if (!value) return "";
   const date = new Date(value);
@@ -45,6 +47,24 @@ function toApiDateTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString();
+}
+
+function startOfWeek(base: Date) {
+  const date = new Date(base);
+  const day = date.getDay();
+  date.setDate(date.getDate() - day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addDays(base: Date, days: number) {
+  const date = new Date(base);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function dayKey(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
 export default function AdminAttendancesPage() {
@@ -62,6 +82,8 @@ export default function AdminAttendancesPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | string>("all");
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [weekOffset, setWeekOffset] = useState(0);
 
   const [formUnitId, setFormUnitId] = useState("");
   const [formTechnicianId, setFormTechnicianId] = useState("");
@@ -102,6 +124,46 @@ export default function AdminAttendancesPage() {
         .includes(q);
     });
   }, [rows, search, statusFilter]);
+
+  const weekBase = useMemo(() => {
+    const today = new Date();
+    const weekStart = startOfWeek(today);
+    return addDays(weekStart, weekOffset * 7);
+  }, [weekOffset]);
+
+  const weekDays = useMemo(() => {
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = addDays(weekBase, index);
+      return {
+        date,
+        key: dayKey(date),
+        label: WEEK_DAYS[date.getDay()],
+        display: date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
+      };
+    });
+  }, [weekBase]);
+
+  const calendarMap = useMemo(() => {
+    const map = new Map<string, AttendanceRow[]>();
+    for (const day of weekDays) {
+      map.set(day.key, []);
+    }
+    for (const row of filtered) {
+      const date = row.scheduledFor || row.startedAt;
+      if (!date) continue;
+      const key = dayKey(new Date(date));
+      if (!map.has(key)) continue;
+      map.get(key)!.push(row);
+    }
+    for (const [, list] of map) {
+      list.sort((a, b) => {
+        const aDate = new Date(a.scheduledFor || a.startedAt || 0).getTime();
+        const bDate = new Date(b.scheduledFor || b.startedAt || 0).getTime();
+        return aDate - bDate;
+      });
+    }
+    return map;
+  }, [filtered, weekDays]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -269,11 +331,84 @@ export default function AdminAttendancesPage() {
                     </option>
                   ))}
                 </select>
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("list")}
+                    className={`h-9 rounded border px-3 text-xs font-mono uppercase ${viewMode === "list" ? "border-brand/40 bg-brand/10 text-brand" : "border-border text-text-2"}`}
+                  >
+                    Lista
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("calendar")}
+                    className={`h-9 rounded border px-3 text-xs font-mono uppercase ${viewMode === "calendar" ? "border-brand/40 bg-brand/10 text-brand" : "border-border text-text-2"}`}
+                  >
+                    Calendário
+                  </button>
+                </div>
               </div>
 
               {loading ? (
                 <div className="p-4">
                   <div className="h-16 animate-pulse rounded border border-border bg-surface-2" />
+                </div>
+              ) : viewMode === "calendar" ? (
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2 rounded border border-border bg-surface-2 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setWeekOffset((prev) => prev - 1)}
+                      className="h-8 rounded border border-border px-2 text-text-2 hover:bg-surface-3"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+                    </button>
+                    <p className="text-[11px] font-mono uppercase tracking-wide text-text-2">
+                      Semana de {weekDays[0].date.toLocaleDateString("pt-BR")} a {weekDays[6].date.toLocaleDateString("pt-BR")}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setWeekOffset((prev) => prev + 1)}
+                      className="h-8 rounded border border-border px-2 text-text-2 hover:bg-surface-3"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
+                    {weekDays.map((day) => {
+                      const dayRows = calendarMap.get(day.key) || [];
+                      return (
+                        <div key={day.key} className="min-h-[160px] rounded border border-border bg-surface">
+                          <div className="border-b border-border bg-surface-2 px-2 py-2">
+                            <p className="text-[10px] font-mono uppercase tracking-wider text-text-3">{day.label}</p>
+                            <p className="text-xs font-semibold text-text">{day.display}</p>
+                          </div>
+                          <div className="space-y-2 p-2">
+                            {dayRows.length === 0 ? (
+                              <p className="text-[10px] text-text-3">Sem agendamentos</p>
+                            ) : (
+                              dayRows.map((row) => (
+                                <button
+                                  key={row.id}
+                                  type="button"
+                                  onClick={() => startEdit(row)}
+                                  className="w-full rounded border border-border bg-surface-2 p-2 text-left hover:bg-surface-3 disabled:opacity-40"
+                                  disabled={row.status === "finalizado"}
+                                >
+                                  <p className="text-[10px] font-mono text-text-3">
+                                    {row.scheduledFor ? new Date(row.scheduledFor).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "--:--"}
+                                  </p>
+                                  <p className="truncate text-xs font-semibold text-text">{row.unitName}</p>
+                                  <p className="truncate text-[10px] text-text-3">{row.technicianName}</p>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="py-16 text-center text-text-3">Nenhum atendimento encontrado.</div>

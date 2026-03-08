@@ -9,6 +9,7 @@ type CriticalOccurrenceAlertPayload = {
 };
 
 type QueueUnavailableReason = "REDIS_NOT_CONFIGURED" | "DEPENDENCIES_NOT_INSTALLED";
+type DispatchMode = "queued" | "direct_webhook";
 
 const QUEUE_NAME = "critical-occurrence-alerts";
 const JOB_NAME = "send-critical-occurrence-alert";
@@ -26,6 +27,17 @@ let depsCache: DynamicDeps | null = null;
 let connection: any = null;
 let queue: any = null;
 let worker: any = null;
+
+const metrics = {
+  queuedTotal: 0,
+  directFallbackTotal: 0,
+  enqueueErrorTotal: 0,
+  workerCompletedTotal: 0,
+  workerFailedTotal: 0,
+  lastWorkerError: null as string | null,
+  lastWebhookStatus: null as number | null,
+  lastDispatchAt: null as string | null,
+};
 
 function loadDeps(): DynamicDeps | null {
   if (depsCache) return depsCache;
@@ -46,12 +58,13 @@ function loadDeps(): DynamicDeps | null {
   }
 }
 
+function queueConfigured() {
+  return !!REDIS_URL && !!loadDeps();
+}
+
 function getConnection() {
   const deps = loadDeps();
-  if (!deps) {
-    throw new Error("DEPENDENCIES_NOT_INSTALLED");
-  }
-
+  if (!deps) throw new Error("DEPENDENCIES_NOT_INSTALLED");
   if (!connection) {
     connection = new deps.IORedis(REDIS_URL, {
       maxRetriesPerRequest: null,
@@ -59,62 +72,174 @@ function getConnection() {
       lazyConnect: true,
     });
   }
-
   return connection;
 }
 
 function getQueue() {
   const deps = loadDeps();
-  if (!deps) {
-    throw new Error("DEPENDENCIES_NOT_INSTALLED");
-  }
-
+  if (!deps) throw new Error("DEPENDENCIES_NOT_INSTALLED");
   if (!queue) {
     queue = new deps.Queue(QUEUE_NAME, {
       connection: getConnection(),
     });
   }
-
   return queue;
 }
 
-function isEnabled() {
-  return !!REDIS_URL;
+async function sendWebhookNow(payload: CriticalOccurrenceAlertPayload) {
+  if (!PUSH_WEBHOOK_URL) {
+    throw new Error("CRITICAL_PUSH_WEBHOOK_URL_NOT_CONFIGURED");
+  }
+
+  const response = await fetch(PUSH_WEBHOOK_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      event: "occurrence.critical.created",
+      payload,
+    }),
+  });
+
+  metrics.lastWebhookStatus = response.status;
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(`Push webhook falhou: HTTP ${response.status} - ${raw.slice(0, 500)}`);
+  }
 }
 
 export function isCriticalAlertQueueEnabled() {
-  return isEnabled() && !!loadDeps();
+  return queueConfigured();
 }
 
-export async function enqueueCriticalOccurrenceAlert(payload: CriticalOccurrenceAlertPayload) {
-  if (!isEnabled()) {
-    return { queued: false as const, reason: "REDIS_NOT_CONFIGURED" as QueueUnavailableReason };
+export async function dispatchCriticalOccurrenceAlert(payload: CriticalOccurrenceAlertPayload) {
+  metrics.lastDispatchAt = new Date().toISOString();
+
+  if (queueConfigured()) {
+    try {
+      await getQueue().add(
+        JOB_NAME,
+        payload,
+        {
+          attempts: 5,
+          backoff: {
+            type: "exponential",
+            delay: 2_000,
+          },
+          removeOnComplete: 100,
+          removeOnFail: 100,
+          jobId: payload.occurrenceId,
+        },
+      );
+      metrics.queuedTotal += 1;
+      return { ok: true as const, mode: "queued" as DispatchMode };
+    } catch (error) {
+      metrics.enqueueErrorTotal += 1;
+      const message = error instanceof Error ? error.message : "QUEUE_ADD_ERROR";
+      if (!PUSH_WEBHOOK_URL) {
+        return {
+          ok: false as const,
+          reason: "QUEUE_ADD_FAILED_AND_NO_WEBHOOK",
+          error: message,
+        };
+      }
+
+      try {
+        await sendWebhookNow(payload);
+        metrics.directFallbackTotal += 1;
+        return { ok: true as const, mode: "direct_webhook" as DispatchMode, fallback: "queue_add_failed" as const };
+      } catch (fallbackError) {
+        return {
+          ok: false as const,
+          reason: "QUEUE_AND_WEBHOOK_FAILED",
+          error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        };
+      }
+    }
   }
 
-  if (!loadDeps()) {
-    return { queued: false as const, reason: "DEPENDENCIES_NOT_INSTALLED" as QueueUnavailableReason };
+  if (!PUSH_WEBHOOK_URL) {
+    const reason: QueueUnavailableReason = !REDIS_URL ? "REDIS_NOT_CONFIGURED" : "DEPENDENCIES_NOT_INSTALLED";
+    return { ok: false as const, reason, error: "Nenhuma estratégia de entrega disponível." };
   }
 
-  await getQueue().add(
-    JOB_NAME,
-    payload,
-    {
-      attempts: 5,
-      backoff: {
-        type: "exponential",
-        delay: 2_000,
-      },
-      removeOnComplete: 100,
-      removeOnFail: 100,
-      jobId: payload.occurrenceId,
-    },
+  try {
+    await sendWebhookNow(payload);
+    metrics.directFallbackTotal += 1;
+    return { ok: true as const, mode: "direct_webhook" as DispatchMode, fallback: "queue_unavailable" as const };
+  } catch (error) {
+    const reason: QueueUnavailableReason = !REDIS_URL ? "REDIS_NOT_CONFIGURED" : "DEPENDENCIES_NOT_INSTALLED";
+    return {
+      ok: false as const,
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function getCriticalAlertQueueStatus() {
+  const base = {
+    queueConfigured: queueConfigured(),
+    redisConfigured: !!REDIS_URL,
+    depsInstalled: !!loadDeps(),
+    webhookConfigured: !!PUSH_WEBHOOK_URL,
+    workerRunning: !!worker,
+    metrics,
+  };
+
+  if (!queueConfigured()) {
+    return {
+      ...base,
+      jobCounts: null,
+    };
+  }
+
+  const jobCounts = await getQueue().getJobCounts(
+    "waiting",
+    "active",
+    "completed",
+    "failed",
+    "delayed",
+    "paused",
   );
 
-  return { queued: true as const };
+  return {
+    ...base,
+    jobCounts,
+  };
+}
+
+export async function listCriticalAlertFailedJobs(limit = 20) {
+  if (!queueConfigured()) return [];
+  const safeLimit = Math.max(1, Math.min(limit, 200));
+  const jobs = await getQueue().getFailed(0, safeLimit - 1);
+  return jobs.map((job: any) => ({
+    id: String(job.id),
+    name: job.name,
+    attemptsMade: job.attemptsMade,
+    failedReason: job.failedReason,
+    timestamp: job.timestamp,
+    processedOn: job.processedOn || null,
+    finishedOn: job.finishedOn || null,
+    data: job.data,
+  }));
+}
+
+export async function retryCriticalAlertJob(jobId: string) {
+  if (!queueConfigured()) {
+    return { success: false as const, error: "Fila crítica não configurada." };
+  }
+  const job = await getQueue().getJob(jobId);
+  if (!job) {
+    return { success: false as const, error: "Job não encontrado." };
+  }
+  await job.retry();
+  return { success: true as const };
 }
 
 export async function startCriticalOccurrenceAlertWorker(logger: { info: Function; warn: Function; error: Function }) {
-  if (!isEnabled()) {
+  if (!REDIS_URL) {
     logger.warn("BullMQ desabilitado: REDIS_URL/BULLMQ_REDIS_URL não configurado.");
     return;
   }
@@ -125,36 +250,12 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
     return;
   }
 
-  if (worker) {
-    return;
-  }
+  if (worker) return;
 
   worker = new deps.Worker(
     QUEUE_NAME,
     async (job: any) => {
-      if (!PUSH_WEBHOOK_URL) {
-        logger.warn(
-          { occurrenceId: job.data.occurrenceId },
-          "CRITICAL_PUSH_WEBHOOK_URL não configurado; push crítico não enviado.",
-        );
-        return;
-      }
-
-      const response = await fetch(PUSH_WEBHOOK_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          event: "occurrence.critical.created",
-          payload: job.data,
-        }),
-      });
-
-      if (!response.ok) {
-        const raw = await response.text();
-        throw new Error(`Push webhook falhou: HTTP ${response.status} - ${raw.slice(0, 500)}`);
-      }
+      await sendWebhookNow(job.data as CriticalOccurrenceAlertPayload);
     },
     {
       connection: getConnection(),
@@ -163,10 +264,13 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
   );
 
   worker.on("completed", (job: any) => {
+    metrics.workerCompletedTotal += 1;
     logger.info({ jobId: job.id, occurrenceId: job.data.occurrenceId }, "Push crítico processado com sucesso.");
   });
 
   worker.on("failed", (job: any, err: any) => {
+    metrics.workerFailedTotal += 1;
+    metrics.lastWorkerError = err?.message || "WORKER_FAILED";
     logger.error(
       { jobId: job?.id, occurrenceId: job?.data?.occurrenceId, error: err?.message },
       "Falha no processamento de push crítico.",
