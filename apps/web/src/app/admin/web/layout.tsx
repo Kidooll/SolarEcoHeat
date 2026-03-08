@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 const NAV_ITEMS = [
     { href: "/admin/web", label: "Dashboard", icon: "dashboard" },
+    { href: "/admin/web/attendances", label: "Atendimentos", icon: "event_note" },
     { href: "/admin/web/services", label: "Serviços", icon: "construction" },
     { href: "/admin/web/finance/quotes", label: "Orçamentos", icon: "request_quote" },
     { href: "/admin/web/finance", label: "Financeiro", icon: "account_balance_wallet" },

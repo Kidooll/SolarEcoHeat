@@ -66,10 +66,10 @@ export default function DashboardPage() {
                                         <span className="font-mono text-xs text-text-3">#SYS-{data.criticalOccurrence.id.slice(0, 4)}</span>
                                     </div>
                                     <p className="text-sm text-text-3 mb-4 font-mono truncate">{data.criticalOccurrence.description}</p>
-                                    <div className="flex gap-2">
+                                    <div className="flex gap-2 flex-wrap">
                                         <Button
                                             variant="danger"
-                                            className="flex-1 text-xs py-2.5 h-auto"
+                                            className="flex-1 text-xs py-2.5 h-auto min-w-[150px]"
                                             onClick={() => {
                                                 const systemId = data?.criticalOccurrence?.system?.id;
                                                 if (systemId) router.push(`/pwa/systems/${systemId}`);
@@ -78,9 +78,25 @@ export default function DashboardPage() {
                                             <span className="material-symbols-outlined text-[16px]">visibility</span>
                                             VER DETALHES
                                         </Button>
-                                        <Button variant="secondary" className="aspect-square p-0 w-11 h-11 flex items-center justify-center">
-                                            <span className="material-symbols-outlined text-[18px]">directions</span>
-                                        </Button>
+                                        {data?.role === "admin" ? (
+                                            <Button
+                                                variant="secondary"
+                                                className="text-xs py-2.5 h-auto min-w-[160px]"
+                                                onClick={() => {
+                                                    const occurrenceId = data?.criticalOccurrence?.id;
+                                                    if (occurrenceId) {
+                                                        router.push(`/admin/finance/quote/new?occurrenceId=${occurrenceId}`);
+                                                    }
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">request_quote</span>
+                                                GERAR ORÇAMENTO
+                                            </Button>
+                                        ) : (
+                                            <Button variant="secondary" className="aspect-square p-0 w-11 h-11 flex items-center justify-center">
+                                                <span className="material-symbols-outlined text-[18px]">directions</span>
+                                            </Button>
+                                        )}
                                     </div>
                                 </div>
                             </div>

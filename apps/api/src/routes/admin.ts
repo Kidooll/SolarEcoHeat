@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from "fastify";
 import {
+  attendances,
   auditLogs,
   companySettings,
   clients,
@@ -166,6 +167,16 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     const normalized = value.toLowerCase().trim();
     if (normalized === "interno") return "interno";
     if (normalized === "externo") return "externo";
+    return null;
+  }
+
+  function normalizeAttendanceStatus(value: unknown): "agendado" | "em_andamento" | "finalizado" | "cancelado" | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.toLowerCase().trim();
+    if (normalized === "agendado") return "agendado";
+    if (normalized === "em_andamento" || normalized === "emandamento") return "em_andamento";
+    if (normalized === "finalizado") return "finalizado";
+    if (normalized === "cancelado") return "cancelado";
     return null;
   }
 
@@ -1337,6 +1348,262 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       fastify.log.warn({ error }, "Falha ao consultar técnicos em profiles");
       return { success: true, data: [] };
     }
+  });
+
+  fastify.get("/attendances", async (request, reply) => {
+    const query = request.query as {
+      status?: string;
+      unitId?: string;
+      technicianId?: string;
+      search?: string;
+    };
+
+    const statusFilter = normalizeAttendanceStatus(query.status);
+
+    const rows = await db
+      .select({
+        id: attendances.id,
+        unitId: attendances.unitId,
+        technicianId: attendances.technicianId,
+        type: attendances.type,
+        status: attendances.status,
+        startedAt: attendances.startedAt,
+        finishedAt: attendances.finishedAt,
+        createdAt: attendances.createdAt,
+        updatedAt: attendances.updatedAt,
+        unitName: technicalUnits.name,
+        clientName: clients.name,
+      })
+      .from(attendances)
+      .leftJoin(technicalUnits, eq(attendances.unitId, technicalUnits.id))
+      .leftJoin(clients, eq(technicalUnits.clientId, clients.id))
+      .orderBy(desc(attendances.createdAt))
+      .limit(500);
+
+    const technicianIds = Array.from(new Set(rows.map((row) => row.technicianId).filter(Boolean))) as string[];
+    const techniciansMap = new Map<string, { full_name: string | null; email: string | null }>();
+
+    if (technicianIds.length) {
+      try {
+        const result = await db.execute(sql`
+          select id, full_name, email
+          from profiles
+          where id = any(${technicianIds}::uuid[])
+        `);
+        const techRows = Array.isArray((result as any).rows) ? (result as any).rows : (result as any);
+        if (Array.isArray(techRows)) {
+          for (const tech of techRows) {
+            if (!tech?.id) continue;
+            techniciansMap.set(tech.id, {
+              full_name: tech.full_name ?? null,
+              email: tech.email ?? null,
+            });
+          }
+        }
+      } catch (error) {
+        fastify.log.warn({ error }, "Falha ao enriquecer atendimentos com dados de técnicos.");
+      }
+    }
+
+    const normalizedSearch = (query.search || "").trim().toLowerCase();
+    const filtered = rows.filter((row) => {
+      if (statusFilter && row.status !== statusFilter) return false;
+      if (query.unitId && row.unitId !== query.unitId) return false;
+      if (query.technicianId && row.technicianId !== query.technicianId) return false;
+      if (!normalizedSearch) return true;
+
+      const tech = techniciansMap.get(row.technicianId);
+      const targets = [
+        row.type,
+        row.status,
+        row.unitName || "",
+        row.clientName || "",
+        tech?.full_name || "",
+        tech?.email || "",
+        row.id,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return targets.includes(normalizedSearch);
+    });
+
+    return {
+      success: true,
+      data: filtered.map((row) => {
+        const tech = techniciansMap.get(row.technicianId);
+        return {
+          id: row.id,
+          unitId: row.unitId,
+          technicianId: row.technicianId,
+          type: row.type,
+          status: row.status,
+          scheduledFor: row.startedAt,
+          startedAt: row.startedAt,
+          finishedAt: row.finishedAt,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          unitName: row.unitName || "Unidade",
+          clientName: row.clientName || "Sem cliente",
+          technicianName: tech?.full_name || "Técnico",
+          technicianEmail: tech?.email || null,
+        };
+      }),
+    };
+  });
+
+  fastify.post("/attendances", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const body = request.body as {
+      unitId?: string;
+      technicianId?: string;
+      type?: string;
+      status?: string;
+      scheduledFor?: string | null;
+    };
+
+    if (!body.unitId || !body.technicianId || !body.type?.trim()) {
+      return reply.status(400).send({ error: "Unidade, técnico e tipo são obrigatórios." });
+    }
+
+    const status = normalizeAttendanceStatus(body.status) || "agendado";
+    const parsedDate = body.scheduledFor ? new Date(body.scheduledFor) : new Date();
+    if (Number.isNaN(parsedDate.getTime())) {
+      return reply.status(400).send({ error: "Data/hora de agendamento inválida." });
+    }
+
+    const [unitExists] = await db
+      .select({ id: technicalUnits.id })
+      .from(technicalUnits)
+      .where(eq(technicalUnits.id, body.unitId))
+      .limit(1);
+
+    if (!unitExists) {
+      return reply.status(400).send({ error: "Unidade inválida." });
+    }
+
+    const [created] = await db
+      .insert(attendances)
+      .values({
+        unitId: body.unitId,
+        technicianId: body.technicianId,
+        type: body.type.trim(),
+        status,
+        startedAt: parsedDate,
+      })
+      .returning({
+        id: attendances.id,
+        unitId: attendances.unitId,
+        technicianId: attendances.technicianId,
+        type: attendances.type,
+        status: attendances.status,
+        startedAt: attendances.startedAt,
+        createdAt: attendances.createdAt,
+      });
+
+    await appendAuditLog(db, {
+      tableName: "attendances",
+      recordId: created.id,
+      action: "INSERT",
+      oldData: null,
+      newData: created,
+      userId: actorUserId,
+    });
+
+    return { success: true, data: created };
+  });
+
+  fastify.put("/attendances/:id", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const { id } = request.params as { id: string };
+    const body = request.body as {
+      unitId?: string;
+      technicianId?: string;
+      type?: string;
+      status?: string;
+      scheduledFor?: string | null;
+    };
+
+    const [existing] = await db
+      .select({
+        id: attendances.id,
+        unitId: attendances.unitId,
+        technicianId: attendances.technicianId,
+        type: attendances.type,
+        status: attendances.status,
+        startedAt: attendances.startedAt,
+        finishedAt: attendances.finishedAt,
+        updatedAt: attendances.updatedAt,
+      })
+      .from(attendances)
+      .where(eq(attendances.id, id))
+      .limit(1);
+
+    if (!existing) {
+      return reply.status(404).send({ error: "Atendimento não encontrado." });
+    }
+
+    if (existing.status === "finalizado") {
+      return reply.status(409).send({ error: "Atendimento finalizado não pode ser alterado." });
+    }
+
+    const nextStatus = normalizeAttendanceStatus(body.status) || existing.status;
+    const nextScheduledFor = body.scheduledFor ? new Date(body.scheduledFor) : existing.startedAt;
+    if (nextScheduledFor && Number.isNaN(new Date(nextScheduledFor).getTime())) {
+      return reply.status(400).send({ error: "Data/hora de agendamento inválida." });
+    }
+
+    const nextUnitId = body.unitId || existing.unitId;
+    const [unitExists] = await db
+      .select({ id: technicalUnits.id })
+      .from(technicalUnits)
+      .where(eq(technicalUnits.id, nextUnitId))
+      .limit(1);
+
+    if (!unitExists) {
+      return reply.status(400).send({ error: "Unidade inválida." });
+    }
+
+    const [updated] = await db
+      .update(attendances)
+      .set({
+        unitId: nextUnitId,
+        technicianId: body.technicianId || existing.technicianId,
+        type: body.type?.trim() || existing.type,
+        status: nextStatus,
+        startedAt: nextScheduledFor,
+        updatedAt: new Date(),
+      })
+      .where(eq(attendances.id, id))
+      .returning({
+        id: attendances.id,
+        unitId: attendances.unitId,
+        technicianId: attendances.technicianId,
+        type: attendances.type,
+        status: attendances.status,
+        startedAt: attendances.startedAt,
+        finishedAt: attendances.finishedAt,
+        updatedAt: attendances.updatedAt,
+      });
+
+    await appendAuditLog(db, {
+      tableName: "attendances",
+      recordId: id,
+      action: "UPDATE",
+      oldData: existing,
+      newData: updated,
+      userId: actorUserId,
+    });
+
+    return { success: true, data: updated };
   });
 
   fastify.get("/units/:id", async (request, reply) => {

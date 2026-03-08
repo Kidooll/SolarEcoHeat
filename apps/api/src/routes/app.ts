@@ -157,6 +157,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           return reply.send({
             success: true,
             data: {
+              role,
               display_name: ((request.user.email || "").split("@")[0] || "tecnico").toUpperCase(),
               stats: { total: 0, critical: 0, success: 0 },
               tasks: [],
@@ -285,6 +286,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send({
           success: true,
           data: {
+            role,
             display_name: ((request.user.email || "").split("@")[0] || "tecnico").toUpperCase(),
             stats,
             tasks,

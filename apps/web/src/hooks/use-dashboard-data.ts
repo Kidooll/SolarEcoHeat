@@ -14,6 +14,8 @@ export function useDashboardData() {
             const response = await apiFetch<{
                 success: boolean;
                 data: {
+                    role: "admin" | "technician" | "client" | "unknown";
+                    display_name: string;
                     stats: { total: number; critical: number; success: number };
                     tasks: any[];
                     criticalOccurrence: any | null;

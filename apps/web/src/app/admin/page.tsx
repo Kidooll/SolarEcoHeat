@@ -8,11 +8,14 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { Button } from "@/components/ui/button";
 import { useFinanceStats } from "@/hooks/use-finance-stats";
 import { createClient } from "@/utils/supabase/client";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useDashboardData } from "@/hooks/use-dashboard-data";
 
 export default function AdminDashboardPage() {
+    const router = useRouter();
     const pathname = usePathname();
     const isWebAdminContext = pathname.startsWith("/admin/web");
+    const { data: dashboardData } = useDashboardData();
     const { stats, loading: loadingStats, error } = useFinanceStats();
     const [activeTechs, setActiveTechs] = useState<any[]>([]);
     const [loadingTechs, setLoadingTechs] = useState(true);
@@ -145,6 +148,12 @@ export default function AdminDashboardPage() {
                         <h2 className="font-sans text-[10px] font-bold tracking-[0.2em] text-text-3 uppercase">Gestão Estratégica</h2>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
+                        <Link href="/admin/attendances" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                            <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
+                                <span className="material-symbols-outlined text-brand">event_note</span>
+                            </div>
+                            <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Atendimentos</span>
+                        </Link>
                         <Link href="/admin/services" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">construction</span>
@@ -266,17 +275,46 @@ export default function AdminDashboardPage() {
                             <button className="text-[10px] text-text-3 hover:text-text font-mono uppercase tracking-wider transition-all">Ver Tudo</button>
                         </div>
                         <div className="divide-y divide-border">
-                            <div className="p-4 border-l-2 border-l-crit">
-                                <div className="flex justify-between items-start mb-2">
-                                    <span className="text-[9px] font-mono font-bold text-crit uppercase tracking-widest border border-crit/30 bg-crit/10 px-1.5 py-0.5">Alta Prioridade</span>
-                                    <span className="text-[10px] text-text-3 font-mono">LIVE FEED</span>
+                            {dashboardData?.criticalOccurrence ? (
+                                <div className="p-4 border-l-2 border-l-crit">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <span className="text-[9px] font-mono font-bold text-crit uppercase tracking-widest border border-crit/30 bg-crit/10 px-1.5 py-0.5">Alta Prioridade</span>
+                                        <span className="text-[10px] text-text-3 font-mono">LIVE FEED</span>
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-medium text-text mb-1">{dashboardData.criticalOccurrence.system.name}</p>
+                                        <p className="text-xs text-text-3 leading-relaxed font-light mb-3">{dashboardData.criticalOccurrence.description}</p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <Button
+                                                variant="secondary"
+                                                className="text-[10px] py-1.5 font-bold uppercase tracking-wider"
+                                                onClick={() => router.push(`/pwa/systems/${dashboardData.criticalOccurrence.system.id}`)}
+                                            >
+                                                Ver Detalhes
+                                            </Button>
+                                            <Button
+                                                variant="danger"
+                                                className="text-[10px] py-1.5 font-bold uppercase tracking-wider"
+                                                onClick={() => router.push(`/admin/finance/quote/new?occurrenceId=${dashboardData.criticalOccurrence.id}`)}
+                                            >
+                                                Gerar Orçamento
+                                            </Button>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="flex-1">
-                                    <p className="text-sm font-medium text-text mb-1">Monitoramento de Sistemas Ativo</p>
-                                    <p className="text-xs text-text-3 leading-relaxed font-light mb-3">O sistema está monitorando 100% das unidades técnicas. Nenhuma falha crítica detectada no momento.</p>
-                                    <Button variant="secondary" className="w-full text-[10px] py-1.5 font-bold uppercase tracking-wider">Verificar Sensores</Button>
+                            ) : (
+                                <div className="p-4 border-l-2 border-l-crit">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <span className="text-[9px] font-mono font-bold text-crit uppercase tracking-widest border border-crit/30 bg-crit/10 px-1.5 py-0.5">Alta Prioridade</span>
+                                        <span className="text-[10px] text-text-3 font-mono">LIVE FEED</span>
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-medium text-text mb-1">Monitoramento de Sistemas Ativo</p>
+                                        <p className="text-xs text-text-3 leading-relaxed font-light mb-3">O sistema está monitorando 100% das unidades técnicas. Nenhuma falha crítica detectada no momento.</p>
+                                        <Button variant="secondary" className="w-full text-[10px] py-1.5 font-bold uppercase tracking-wider">Verificar Sensores</Button>
+                                    </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     </div>
                 </section>
