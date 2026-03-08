@@ -9,6 +9,7 @@ import {
   eq,
   inArray,
   occurrences,
+  quotes,
   sql,
   systemMaintenances,
   systems,
@@ -966,6 +967,157 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       } catch (error) {
         fastify.log.error({ error }, "Falha ao registrar ocorrência");
         return reply.code(500).send({ success: false, error: "Erro ao registrar ocorrência." });
+      }
+    },
+  );
+
+  fastify.post(
+    "/occurrences/:id/quote-draft",
+    { preValidation: [fastify.authenticate] },
+    async (request, reply) => {
+      if (!request.user) return;
+      const role = getUserRole(request.user);
+      if (role !== "technician" && role !== "admin") {
+        return reply.code(403).send({ success: false, error: "Acesso permitido apenas para equipe técnica." });
+      }
+
+      const actorUserId = getActorUserId(request);
+      if (!actorUserId) {
+        return reply.code(401).send({ success: false, error: "Usuário autenticado inválido." });
+      }
+
+      const { id } = request.params as { id: string };
+
+      try {
+        const [occurrenceRow] = await db
+          .select({
+            id: occurrences.id,
+            attendanceId: occurrences.attendanceId,
+            systemId: occurrences.systemId,
+            description: occurrences.description,
+            severity: occurrences.severity,
+            status: occurrences.status,
+            createdAt: occurrences.createdAt,
+          })
+          .from(occurrences)
+          .where(eq(occurrences.id, id))
+          .limit(1);
+
+        if (!occurrenceRow) {
+          return reply.code(404).send({ success: false, error: "Ocorrência não encontrada." });
+        }
+
+        if (normalizeSeverity(occurrenceRow.severity) !== "CRITICO") {
+          return reply.code(400).send({
+            success: false,
+            error: "Somente ocorrências críticas podem gerar rascunho de orçamento por este fluxo.",
+          });
+        }
+
+        const [attendanceRow] = await db
+          .select({
+            id: attendances.id,
+            unitId: attendances.unitId,
+            technicianId: attendances.technicianId,
+          })
+          .from(attendances)
+          .where(eq(attendances.id, occurrenceRow.attendanceId))
+          .limit(1);
+
+        if (!attendanceRow) {
+          return reply.code(404).send({ success: false, error: "Atendimento da ocorrência não encontrado." });
+        }
+
+        if (role === "technician" && attendanceRow.technicianId !== request.user.id) {
+          return reply.code(403).send({ success: false, error: "Ocorrência não pertence ao técnico autenticado." });
+        }
+
+        const scopedUnitIds = await getScopedUnitIds(request.user, role);
+        if (scopedUnitIds && !scopedUnitIds.includes(attendanceRow.unitId)) {
+          return reply.code(404).send({ success: false, error: "Ocorrência não encontrada." });
+        }
+
+        const [existingQuote] = await db
+          .select({
+            id: quotes.id,
+            status: quotes.status,
+            createdAt: quotes.createdAt,
+          })
+          .from(quotes)
+          .where(eq(quotes.occurrenceId, occurrenceRow.id))
+          .limit(1);
+
+        if (existingQuote) {
+          return reply.send({
+            success: true,
+            data: {
+              quoteId: existingQuote.id,
+              status: existingQuote.status,
+              alreadyExisted: true,
+            },
+          });
+        }
+
+        const [unitRow] = await db
+          .select({
+            clientId: technicalUnits.clientId,
+          })
+          .from(technicalUnits)
+          .where(eq(technicalUnits.id, attendanceRow.unitId))
+          .limit(1);
+
+        const issueDate = new Date();
+        const validUntil = new Date(issueDate);
+        validUntil.setDate(validUntil.getDate() + 15);
+
+        const [createdQuote] = await db
+          .insert(quotes)
+          .values({
+            occurrenceId: occurrenceRow.id,
+            clientId: unitRow?.clientId || null,
+            technicianId: attendanceRow.technicianId,
+            issueDate,
+            validUntil,
+            description: occurrenceRow.description?.trim() || "Rascunho de orçamento (ocorrência crítica)",
+            value: "0.00",
+            subtotal: "0.00",
+            discountTotal: "0.00",
+            grandTotal: "0.00",
+            materialsIncluded: false,
+            status: "rascunho",
+            notes: "ORIGEM: PWA_OCORRENCIA_CRITICA\nRASCUNHO_INICIADO_POR_TECNICO: SIM",
+          })
+          .returning({
+            id: quotes.id,
+            status: quotes.status,
+            createdAt: quotes.createdAt,
+          });
+
+        await db.insert(auditLogs).values({
+          tableName: "quotes",
+          recordId: createdQuote.id,
+          action: "INSERT",
+          oldData: null as any,
+          newData: {
+            quoteId: createdQuote.id,
+            occurrenceId: occurrenceRow.id,
+            source: "pwa_occurrence_critical",
+            autoDraft: true,
+          } as any,
+          userId: actorUserId,
+        });
+
+        return reply.send({
+          success: true,
+          data: {
+            quoteId: createdQuote.id,
+            status: createdQuote.status,
+            alreadyExisted: false,
+          },
+        });
+      } catch (error) {
+        fastify.log.error({ error, occurrenceId: id }, "Falha ao gerar rascunho de orçamento da ocorrência.");
+        return reply.code(500).send({ success: false, error: "Erro ao gerar rascunho de orçamento." });
       }
     },
   );

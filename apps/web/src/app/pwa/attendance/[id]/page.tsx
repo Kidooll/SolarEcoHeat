@@ -29,6 +29,7 @@ export default function AttendancePage() {
 
     const [isOccurrenceOpen, setIsOccurrenceOpen] = useState(false);
     const [lockError, setLockError] = useState<string | null>(null);
+    const [occurrenceInfo, setOccurrenceInfo] = useState<string | null>(null);
     const [lockingSystemId, setLockingSystemId] = useState<string | null>(null);
     const [selectedSystemForOccurrence, setSelectedSystemForOccurrence] = useState<{
         id: string;
@@ -94,6 +95,11 @@ export default function AttendancePage() {
                 {lockError && (
                     <div className="rounded border border-crit/40 bg-crit/10 px-3 py-2 text-xs font-mono text-crit">
                         {lockError}
+                    </div>
+                )}
+                {occurrenceInfo && (
+                    <div className="rounded border border-brand/40 bg-brand/10 px-3 py-2 text-xs font-mono text-brand">
+                        {occurrenceInfo}
                     </div>
                 )}
                 {/* Banner da Unidade */}
@@ -180,7 +186,12 @@ export default function AttendancePage() {
                 systemName={selectedSystemForOccurrence?.label || "Sistema"}
                 attendanceId={id}
                 systemId={selectedSystemForOccurrence?.id}
-                onSaved={() => {
+                onSaved={(payload) => {
+                    if (payload?.quoteDraftId) {
+                        setOccurrenceInfo(`Ocorrência registrada. Rascunho de orçamento #${payload.quoteDraftId.slice(0, 8).toUpperCase()} enviado ao admin.`);
+                    } else {
+                        setOccurrenceInfo("Ocorrência registrada com sucesso.");
+                    }
                     window.dispatchEvent(new Event("ecoheat:occurrence-saved"));
                 }}
             />

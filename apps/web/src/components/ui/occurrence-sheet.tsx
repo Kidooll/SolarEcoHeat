@@ -9,7 +9,7 @@ interface OccurrenceSheetProps {
     systemName: string;
     attendanceId?: string;
     systemId?: string;
-    onSaved?: () => void;
+    onSaved?: (payload?: { occurrenceId: string; quoteDraftId?: string }) => void;
 }
 
 type Severity = "ok" | "warning" | "critical";
@@ -17,6 +17,7 @@ type Severity = "ok" | "warning" | "critical";
 export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, systemId, onSaved }: OccurrenceSheetProps) {
     const [severity, setSeverity] = useState<Severity>("critical");
     const [description, setDescription] = useState("");
+    const [createQuoteDraft, setCreateQuoteDraft] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState("");
 
@@ -29,6 +30,7 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
         setError("");
         setDescription("");
         setSeverity("critical");
+        setCreateQuoteDraft(true);
     }, [isOpen]);
 
     if (!isOpen) return null;
@@ -52,7 +54,7 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
 
         setIsSubmitting(true);
         try {
-            await apiFetch<{ success: boolean; data: { id: string } }>("/api/app/occurrences", {
+            const response = await apiFetch<{ success: boolean; data: { id: string } }>("/api/app/occurrences", {
                 method: "POST",
                 body: JSON.stringify({
                     attendanceId,
@@ -61,7 +63,17 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
                     description: description.trim(),
                 }),
             });
-            onSaved?.();
+
+            let quoteDraftId: string | undefined;
+            if (severity === "critical" && createQuoteDraft) {
+                const draftResponse = await apiFetch<{ success: boolean; data: { quoteId: string } }>(
+                    `/api/app/occurrences/${response.data.id}/quote-draft`,
+                    { method: "POST" },
+                );
+                quoteDraftId = draftResponse?.data?.quoteId;
+            }
+
+            onSaved?.({ occurrenceId: response.data.id, quoteDraftId });
             onClose();
         } catch (err: any) {
             console.error("Erro ao registrar ocorrência:", err);
@@ -137,6 +149,23 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
                             placeholder="Descreva o problema detectado..."
                         />
                     </div>
+
+                    {severity === "critical" && (
+                        <label className="flex items-center justify-between rounded border border-border bg-surface-2 px-3 py-2.5">
+                            <div className="flex flex-col">
+                                <span className="text-sm text-text">Gerar orçamento?</span>
+                                <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                    Cria rascunho para handoff ao admin
+                                </span>
+                            </div>
+                            <input
+                                type="checkbox"
+                                checked={createQuoteDraft}
+                                onChange={(e) => setCreateQuoteDraft(e.target.checked)}
+                                className="h-4 w-4 accent-brand"
+                            />
+                        </label>
+                    )}
                 </div>
 
                 <div className="p-5 border-t border-border/30 bg-surface">
