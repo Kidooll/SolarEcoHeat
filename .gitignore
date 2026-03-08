@@ -37,3 +37,20 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Internal Workspace / Non-Production Artifacts
+.agents/
+.amazonq/
+amazonq/
+skills-lock.json
+
+# Local modeling and adaptation assets
+telas/
+user_flow/
+supabase/
+
+# Internal documentation (product/process/design)
+docs/
+stack_analysis.md
+ui-ux-documentation.md
+EcoHeat-Fluxo-Atendimento*.md
