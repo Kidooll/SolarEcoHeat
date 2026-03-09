@@ -155,13 +155,13 @@ export default function AdminAttendancesPage() {
       if (!map.has(key)) continue;
       map.get(key)!.push(row);
     }
-    for (const [, list] of map) {
+    map.forEach((list: AttendanceRow[]) => {
       list.sort((a, b) => {
         const aDate = new Date(a.scheduledFor || a.startedAt || 0).getTime();
         const bDate = new Date(b.scheduledFor || b.startedAt || 0).getTime();
         return aDate - bDate;
       });
-    }
+    });
     return map;
   }, [filtered, weekDays]);
 

@@ -1623,6 +1623,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (nextScheduledFor && Number.isNaN(new Date(nextScheduledFor).getTime())) {
       return reply.status(400).send({ error: "Data/hora de agendamento inválida." });
     }
+    const normalizedScheduledFor = nextScheduledFor ? new Date(nextScheduledFor) : null;
 
     const nextUnitId = body.unitId || existing.unitId;
     const [unitExists] = await db
@@ -1636,6 +1637,9 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     if (nextStatus === "agendado" || nextStatus === "em_andamento") {
+      if (!normalizedScheduledFor) {
+        return reply.status(400).send({ error: "Data/hora de agendamento é obrigatória para este status." });
+      }
       const targetTechnicianId = body.technicianId || existing.technicianId;
       const conflictRows = await db
         .select({
@@ -1653,7 +1657,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         if (row.id === id) return false;
         if (!row.startedAt) return false;
         if (row.status !== "agendado" && row.status !== "em_andamento") return false;
-        return hasScheduleConflict(new Date(nextScheduledFor), new Date(row.startedAt));
+        return hasScheduleConflict(normalizedScheduledFor, new Date(row.startedAt));
       });
 
       if (conflict) {
@@ -1676,7 +1680,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         technicianId: body.technicianId || existing.technicianId,
         type: body.type?.trim() || existing.type,
         status: nextStatus,
-        startedAt: nextScheduledFor,
+        startedAt: normalizedScheduledFor,
         updatedAt: new Date(),
       })
       .where(eq(attendances.id, id))
