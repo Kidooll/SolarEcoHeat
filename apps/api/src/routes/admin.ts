@@ -5,6 +5,7 @@ import {
   companySettings,
   clients,
   components,
+  contracts,
   db,
   desc,
   eq,
@@ -188,6 +189,46 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   function hasScheduleConflict(base: Date, candidate: Date, windowMinutes = 120) {
     const diff = Math.abs(candidate.getTime() - base.getTime());
     return diff <= windowMinutes * 60 * 1000;
+  }
+
+  function normalizeContractFrequency(value: unknown): "weekly" | "monthly" | "bimonthly" | "quarterly" | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.toLowerCase().trim();
+    if (normalized === "weekly" || normalized === "semanal") return "weekly";
+    if (normalized === "monthly" || normalized === "mensal") return "monthly";
+    if (normalized === "bimonthly" || normalized === "bimestral") return "bimonthly";
+    if (normalized === "quarterly" || normalized === "trimestral") return "quarterly";
+    return null;
+  }
+
+  function frequencyStepMonths(value: "weekly" | "monthly" | "bimonthly" | "quarterly") {
+    if (value === "bimonthly") return 2;
+    if (value === "quarterly") return 3;
+    return 1;
+  }
+
+  function addMonths(base: Date, months: number) {
+    const date = new Date(base);
+    date.setMonth(date.getMonth() + months);
+    return date;
+  }
+
+  function parseMonthBounds(month: string | undefined) {
+    if (!month) return null;
+    const match = month.match(/^(\d{4})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    if (monthIndex < 0 || monthIndex > 11) return null;
+    const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
+    const end = new Date(year, monthIndex + 1, 1, 0, 0, 0, 0);
+    return { start, end };
+  }
+
+  function startOfDay(date: Date) {
+    const value = new Date(date);
+    value.setHours(0, 0, 0, 0);
+    return value;
   }
 
   async function ensureQuoteIncomeCategory(tx: typeof db) {
@@ -1705,6 +1746,642 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     return { success: true, data: updated };
+  });
+
+  fastify.get("/attendances/recurrence/preview", async (request, reply) => {
+    const query = request.query as {
+      month?: string;
+      technicianId?: string;
+    };
+
+    if (!query.technicianId) {
+      return reply.status(400).send({ error: "Selecione um técnico para pré-visualizar a recorrência." });
+    }
+
+    const bounds = parseMonthBounds(query.month || new Date().toISOString().slice(0, 7));
+    if (!bounds) {
+      return reply.status(400).send({ error: "Mês inválido. Use o formato YYYY-MM." });
+    }
+
+    const contractRows = await db
+      .select({
+        id: contracts.id,
+        clientId: contracts.clientId,
+        name: contracts.name,
+        frequency: contracts.frequency,
+        startDate: contracts.startDate,
+        endDate: contracts.endDate,
+        status: contracts.status,
+      })
+      .from(contracts)
+      .where(eq(contracts.status, "active"))
+      .orderBy(desc(contracts.createdAt))
+      .limit(500);
+
+    const activeContracts = contractRows.filter((contract) => {
+      const start = new Date(contract.startDate);
+      const end = new Date(contract.endDate);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+      return end.getTime() >= bounds.start.getTime() && start.getTime() < bounds.end.getTime();
+    });
+
+    const clientIds = Array.from(new Set(activeContracts.map((row) => row.clientId).filter(Boolean))) as string[];
+    const [unitRows, clientRows, technicianAttendances, monthAttendances] = await Promise.all([
+      clientIds.length
+        ? db
+            .select({
+              id: technicalUnits.id,
+              clientId: technicalUnits.clientId,
+              name: technicalUnits.name,
+            })
+            .from(technicalUnits)
+            .where(inArray(technicalUnits.clientId, clientIds))
+        : Promise.resolve([]),
+      clientIds.length
+        ? db
+            .select({
+              id: clients.id,
+              name: clients.name,
+              tradeName: clients.tradeName,
+            })
+            .from(clients)
+            .where(inArray(clients.id, clientIds))
+        : Promise.resolve([]),
+      db
+        .select({
+          id: attendances.id,
+          unitId: attendances.unitId,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+        })
+        .from(attendances)
+        .where(eq(attendances.technicianId, query.technicianId))
+        .orderBy(desc(attendances.startedAt))
+        .limit(1000),
+      db
+        .select({
+          id: attendances.id,
+          unitId: attendances.unitId,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+          technicianId: attendances.technicianId,
+          type: attendances.type,
+        })
+        .from(attendances)
+        .where(sql`${attendances.startedAt} >= ${bounds.start} AND ${attendances.startedAt} < ${bounds.end}`)
+        .limit(1500),
+    ]);
+
+    const unitsByClient = new Map<string, Array<{ id: string; name: string }>>();
+    for (const unit of unitRows) {
+      const list = unitsByClient.get(unit.clientId) || [];
+      list.push({ id: unit.id, name: unit.name });
+      unitsByClient.set(unit.clientId, list);
+    }
+    const clientMap = new Map(clientRows.map((row) => [row.id, row.tradeName || row.name]));
+
+    const planned: Array<{
+      contractId: string;
+      contractName: string;
+      frequency: string;
+      clientId: string;
+      clientName: string;
+      unitId: string;
+      unitName: string;
+      scheduledFor: string;
+      status: "ready" | "duplicate" | "conflict";
+      reason: string | null;
+    }> = [];
+
+    for (const contract of activeContracts) {
+      const frequency = normalizeContractFrequency(contract.frequency);
+      if (!frequency) continue;
+
+      const unitList = unitsByClient.get(contract.clientId) || [];
+      if (!unitList.length) continue;
+
+      const contractStart = new Date(contract.startDate);
+      const step = frequencyStepMonths(frequency);
+      for (let cycle = 0; cycle < 24; cycle += 1) {
+        const scheduled = addMonths(contractStart, cycle * step);
+        if (scheduled.getTime() < bounds.start.getTime()) continue;
+        if (scheduled.getTime() >= bounds.end.getTime()) break;
+
+        const existingSameDayByUnit = monthAttendances.filter((row) => {
+          if (!row.startedAt) return false;
+          return startOfDay(new Date(row.startedAt)).getTime() === startOfDay(scheduled).getTime();
+        });
+
+        for (const unit of unitList) {
+          const duplicate = existingSameDayByUnit.find(
+            (row) =>
+              row.unitId === unit.id &&
+              ((row.type || "").toLowerCase() === "preventiva_contrato" || row.technicianId === query.technicianId),
+          );
+
+          const technicianConflict = technicianAttendances.find((row) => {
+            if (!row.startedAt) return false;
+            if (row.status !== "agendado" && row.status !== "em_andamento") return false;
+            return hasScheduleConflict(scheduled, new Date(row.startedAt));
+          });
+
+          let status: "ready" | "duplicate" | "conflict" = "ready";
+          let reason: string | null = null;
+
+          if (duplicate) {
+            status = "duplicate";
+            reason = "Já existe atendimento recorrente para esta unidade no mesmo dia.";
+          } else if (technicianConflict) {
+            status = "conflict";
+            reason = "Conflito de agenda com outro atendimento do técnico.";
+          }
+
+          planned.push({
+            contractId: contract.id,
+            contractName: contract.name,
+            frequency,
+            clientId: contract.clientId,
+            clientName: clientMap.get(contract.clientId) || "Sem cliente",
+            unitId: unit.id,
+            unitName: unit.name,
+            scheduledFor: scheduled.toISOString(),
+            status,
+            reason,
+          });
+        }
+      }
+    }
+
+    const summary = planned.reduce(
+      (acc, item) => {
+        acc.total += 1;
+        if (item.status === "ready") acc.ready += 1;
+        if (item.status === "duplicate") acc.duplicate += 1;
+        if (item.status === "conflict") acc.conflict += 1;
+        return acc;
+      },
+      { total: 0, ready: 0, duplicate: 0, conflict: 0 },
+    );
+
+    return { success: true, data: { month: query.month || new Date().toISOString().slice(0, 7), summary, items: planned } };
+  });
+
+  fastify.post("/attendances/recurrence/publish", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const body = request.body as {
+      month?: string;
+      technicianId?: string;
+      onlyReady?: boolean;
+      selectedKeys?: string[];
+    };
+
+    if (!body.technicianId) {
+      return reply.status(400).send({ error: "Selecione um técnico para publicar recorrência." });
+    }
+
+    const bounds = parseMonthBounds(body.month || new Date().toISOString().slice(0, 7));
+    if (!bounds) {
+      return reply.status(400).send({ error: "Mês inválido. Use o formato YYYY-MM." });
+    }
+
+    const previewQueryMonth = body.month || new Date().toISOString().slice(0, 7);
+    const previewResponse = await (async () => {
+      const contractRows = await db
+        .select({
+          id: contracts.id,
+          clientId: contracts.clientId,
+          name: contracts.name,
+          frequency: contracts.frequency,
+          startDate: contracts.startDate,
+          endDate: contracts.endDate,
+          status: contracts.status,
+        })
+        .from(contracts)
+        .where(eq(contracts.status, "active"))
+        .orderBy(desc(contracts.createdAt))
+        .limit(500);
+
+      const activeContracts = contractRows.filter((contract) => {
+        const start = new Date(contract.startDate);
+        const end = new Date(contract.endDate);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+        return end.getTime() >= bounds.start.getTime() && start.getTime() < bounds.end.getTime();
+      });
+
+      const clientIds = Array.from(new Set(activeContracts.map((row) => row.clientId).filter(Boolean))) as string[];
+      const [unitRows, clientRows, technicianAttendances, monthAttendances] = await Promise.all([
+        clientIds.length
+          ? db
+              .select({
+                id: technicalUnits.id,
+                clientId: technicalUnits.clientId,
+                name: technicalUnits.name,
+              })
+              .from(technicalUnits)
+              .where(inArray(technicalUnits.clientId, clientIds))
+          : Promise.resolve([]),
+        clientIds.length
+          ? db
+              .select({
+                id: clients.id,
+                name: clients.name,
+                tradeName: clients.tradeName,
+              })
+              .from(clients)
+              .where(inArray(clients.id, clientIds))
+          : Promise.resolve([]),
+        db
+          .select({
+            id: attendances.id,
+            unitId: attendances.unitId,
+            status: attendances.status,
+            startedAt: attendances.startedAt,
+          })
+          .from(attendances)
+          .where(eq(attendances.technicianId, body.technicianId!))
+          .orderBy(desc(attendances.startedAt))
+          .limit(1000),
+        db
+          .select({
+            id: attendances.id,
+            unitId: attendances.unitId,
+            status: attendances.status,
+            startedAt: attendances.startedAt,
+            technicianId: attendances.technicianId,
+            type: attendances.type,
+          })
+          .from(attendances)
+          .where(sql`${attendances.startedAt} >= ${bounds.start} AND ${attendances.startedAt} < ${bounds.end}`)
+          .limit(1500),
+      ]);
+
+      const unitsByClient = new Map<string, Array<{ id: string; name: string }>>();
+      for (const unit of unitRows) {
+        const list = unitsByClient.get(unit.clientId) || [];
+        list.push({ id: unit.id, name: unit.name });
+        unitsByClient.set(unit.clientId, list);
+      }
+      const clientMap = new Map(clientRows.map((row) => [row.id, row.tradeName || row.name]));
+
+      const planned: Array<{
+        contractId: string;
+        contractName: string;
+        frequency: string;
+        clientId: string;
+        clientName: string;
+        unitId: string;
+        unitName: string;
+        scheduledFor: string;
+        status: "ready" | "duplicate" | "conflict";
+        reason: string | null;
+      }> = [];
+
+      for (const contract of activeContracts) {
+        const frequency = normalizeContractFrequency(contract.frequency);
+        if (!frequency) continue;
+
+        const unitList = unitsByClient.get(contract.clientId) || [];
+        if (!unitList.length) continue;
+
+        const contractStart = new Date(contract.startDate);
+        const step = frequencyStepMonths(frequency);
+        for (let cycle = 0; cycle < 24; cycle += 1) {
+          const scheduled = addMonths(contractStart, cycle * step);
+          if (scheduled.getTime() < bounds.start.getTime()) continue;
+          if (scheduled.getTime() >= bounds.end.getTime()) break;
+
+          const existingSameDayByUnit = monthAttendances.filter((row) => {
+            if (!row.startedAt) return false;
+            return startOfDay(new Date(row.startedAt)).getTime() === startOfDay(scheduled).getTime();
+          });
+
+          for (const unit of unitList) {
+            const duplicate = existingSameDayByUnit.find(
+              (row) =>
+                row.unitId === unit.id &&
+                ((row.type || "").toLowerCase() === "preventiva_contrato" || row.technicianId === body.technicianId),
+            );
+
+            const technicianConflict = technicianAttendances.find((row) => {
+              if (!row.startedAt) return false;
+              if (row.status !== "agendado" && row.status !== "em_andamento") return false;
+              return hasScheduleConflict(scheduled, new Date(row.startedAt));
+            });
+
+            let status: "ready" | "duplicate" | "conflict" = "ready";
+            let reason: string | null = null;
+
+            if (duplicate) {
+              status = "duplicate";
+              reason = "Já existe atendimento recorrente para esta unidade no mesmo dia.";
+            } else if (technicianConflict) {
+              status = "conflict";
+              reason = "Conflito de agenda com outro atendimento do técnico.";
+            }
+
+            planned.push({
+              contractId: contract.id,
+              contractName: contract.name,
+              frequency,
+              clientId: contract.clientId,
+              clientName: clientMap.get(contract.clientId) || "Sem cliente",
+              unitId: unit.id,
+              unitName: unit.name,
+              scheduledFor: scheduled.toISOString(),
+              status,
+              reason,
+            });
+          }
+        }
+      }
+
+      const summary = planned.reduce(
+        (acc, item) => {
+          acc.total += 1;
+          if (item.status === "ready") acc.ready += 1;
+          if (item.status === "duplicate") acc.duplicate += 1;
+          if (item.status === "conflict") acc.conflict += 1;
+          return acc;
+        },
+        { total: 0, ready: 0, duplicate: 0, conflict: 0 },
+      );
+
+      return { month: previewQueryMonth, summary, items: planned };
+    })();
+
+    const previewItems = Array.isArray(previewResponse.items) ? previewResponse.items : [];
+    const selectedKeySet = new Set(
+      (Array.isArray(body.selectedKeys) ? body.selectedKeys : []).filter((value): value is string => typeof value === "string"),
+    );
+    const candidates = previewItems.filter((item: any) => {
+      const key = `${item.contractId}:${item.unitId}:${item.scheduledFor}`;
+      if (selectedKeySet.size > 0) return selectedKeySet.has(key);
+      if (body.onlyReady === false) return true;
+      return item.status === "ready";
+    });
+
+    const createdIds: string[] = [];
+    const skipped: Array<{ key: string; reason: string }> = [];
+
+    for (const item of candidates) {
+      if (item.status !== "ready") {
+        skipped.push({ key: `${item.contractId}:${item.unitId}:${item.scheduledFor}`, reason: item.reason || "Não elegível." });
+        continue;
+      }
+
+      const startedAt = new Date(item.scheduledFor);
+      if (Number.isNaN(startedAt.getTime())) {
+        skipped.push({ key: `${item.contractId}:${item.unitId}:${item.scheduledFor}`, reason: "Data inválida." });
+        continue;
+      }
+
+      const [created] = await db
+        .insert(attendances)
+        .values({
+          unitId: item.unitId,
+          technicianId: body.technicianId!,
+          type: "preventiva_contrato",
+          status: "agendado",
+          startedAt,
+          updatedAt: new Date(),
+        })
+        .returning({ id: attendances.id });
+
+      createdIds.push(created.id);
+
+      await appendAuditLog(db, {
+        tableName: "attendances",
+        recordId: created.id,
+        action: "INSERT",
+        oldData: null,
+        newData: {
+          source: "contract_recurrence_publish",
+          contractId: item.contractId,
+          unitId: item.unitId,
+          scheduledFor: item.scheduledFor,
+          type: "preventiva_contrato",
+        },
+        userId: actorUserId,
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        month: body.month || new Date().toISOString().slice(0, 7),
+        requestedCount: candidates.length,
+        createdCount: createdIds.length,
+        skippedCount: skipped.length,
+        createdIds,
+        skipped,
+      },
+    };
+  });
+
+  fastify.post("/attendances/batch-update", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const body = request.body as {
+      ids?: string[];
+      technicianId?: string;
+      type?: string;
+      status?: string;
+      scheduledFor?: string | null;
+      shiftMinutes?: number | string | null;
+    };
+
+    const ids = Array.isArray(body.ids)
+      ? Array.from(new Set(body.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)))
+      : [];
+
+    if (!ids.length) {
+      return reply.status(400).send({ error: "Informe ao menos um atendimento para atualização em lote." });
+    }
+
+    if (ids.length > 100) {
+      return reply.status(400).send({ error: "Limite máximo de 100 atendimentos por operação em lote." });
+    }
+
+    const normalizedStatus = body.status ? normalizeAttendanceStatus(body.status) : null;
+    if (body.status && !normalizedStatus) {
+      return reply.status(400).send({ error: "Status inválido para atualização em lote." });
+    }
+
+    const scheduledForDate = body.scheduledFor ? new Date(body.scheduledFor) : null;
+    if (scheduledForDate && Number.isNaN(scheduledForDate.getTime())) {
+      return reply.status(400).send({ error: "Data/hora de agendamento inválida." });
+    }
+
+    const shiftMinutes =
+      body.shiftMinutes === null || body.shiftMinutes === undefined || body.shiftMinutes === ""
+        ? null
+        : Number(body.shiftMinutes);
+
+    if (shiftMinutes !== null && (!Number.isFinite(shiftMinutes) || Math.abs(shiftMinutes) > 1440)) {
+      return reply
+        .status(400)
+        .send({ error: "Deslocamento de horário inválido. Use minutos entre -1440 e 1440." });
+    }
+
+    const hasAnyUpdate =
+      !!body.technicianId ||
+      !!(body.type && body.type.trim().length > 0) ||
+      !!normalizedStatus ||
+      !!scheduledForDate ||
+      shiftMinutes !== null;
+
+    if (!hasAnyUpdate) {
+      return reply.status(400).send({ error: "Nenhum campo de atualização em lote foi informado." });
+    }
+
+    const existingRows = await db
+      .select({
+        id: attendances.id,
+        unitId: attendances.unitId,
+        technicianId: attendances.technicianId,
+        type: attendances.type,
+        status: attendances.status,
+        startedAt: attendances.startedAt,
+        finishedAt: attendances.finishedAt,
+        updatedAt: attendances.updatedAt,
+      })
+      .from(attendances)
+      .where(inArray(attendances.id, ids));
+
+    if (!existingRows.length) {
+      return reply.status(404).send({ error: "Nenhum atendimento encontrado para os IDs informados." });
+    }
+
+    const selectedIds = new Set(existingRows.map((row) => row.id));
+    const missingIds = ids.filter((id) => !selectedIds.has(id));
+    const activeStatuses = new Set(["agendado", "em_andamento"]);
+    const plannedByTechnician = new Map<string, Array<{ id: string; date: Date }>>();
+    const conflictCache = new Map<
+      string,
+      Array<{ id: string; status: string; startedAt: Date | null; unitId: string }>
+    >();
+
+    async function getConflictRows(technicianId: string) {
+      if (conflictCache.has(technicianId)) return conflictCache.get(technicianId)!;
+      const rows = await db
+        .select({
+          id: attendances.id,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+          unitId: attendances.unitId,
+        })
+        .from(attendances)
+        .where(eq(attendances.technicianId, technicianId))
+        .orderBy(desc(attendances.startedAt))
+        .limit(300);
+      conflictCache.set(technicianId, rows);
+      return rows;
+    }
+
+    const updatedIds: string[] = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+
+    for (const row of existingRows) {
+      if (row.status === "finalizado") {
+        skipped.push({ id: row.id, reason: "Atendimento finalizado não pode ser alterado." });
+        continue;
+      }
+
+      const nextTechnicianId = body.technicianId || row.technicianId;
+      const nextType = body.type?.trim() ? body.type.trim() : row.type;
+      const nextStatus = normalizedStatus || row.status;
+
+      let nextStartedAt = row.startedAt ? new Date(row.startedAt) : null;
+      if (scheduledForDate) {
+        nextStartedAt = new Date(scheduledForDate);
+      } else if (shiftMinutes !== null && nextStartedAt) {
+        nextStartedAt = new Date(nextStartedAt.getTime() + shiftMinutes * 60 * 1000);
+      }
+
+      if (activeStatuses.has(nextStatus)) {
+        if (!nextStartedAt || Number.isNaN(nextStartedAt.getTime())) {
+          skipped.push({ id: row.id, reason: "Data/hora obrigatória para status agendado/em andamento." });
+          continue;
+        }
+
+        const conflictRows = await getConflictRows(nextTechnicianId);
+        const hasDbConflict = conflictRows.some((conflict) => {
+          if (conflict.id === row.id) return false;
+          if (selectedIds.has(conflict.id)) return false;
+          if (!conflict.startedAt) return false;
+          if (!activeStatuses.has(conflict.status)) return false;
+          return hasScheduleConflict(nextStartedAt!, new Date(conflict.startedAt));
+        });
+
+        if (hasDbConflict) {
+          skipped.push({ id: row.id, reason: "Conflito de agenda com outro atendimento do técnico." });
+          continue;
+        }
+
+        const planned = plannedByTechnician.get(nextTechnicianId) || [];
+        const hasBatchConflict = planned.some((plannedItem) =>
+          plannedItem.id !== row.id && hasScheduleConflict(nextStartedAt!, plannedItem.date),
+        );
+        if (hasBatchConflict) {
+          skipped.push({ id: row.id, reason: "Conflito de agenda dentro da operação em lote." });
+          continue;
+        }
+        planned.push({ id: row.id, date: nextStartedAt });
+        plannedByTechnician.set(nextTechnicianId, planned);
+      }
+
+      const [updated] = await db
+        .update(attendances)
+        .set({
+          technicianId: nextTechnicianId,
+          type: nextType,
+          status: nextStatus,
+          startedAt: nextStartedAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(attendances.id, row.id))
+        .returning({
+          id: attendances.id,
+          unitId: attendances.unitId,
+          technicianId: attendances.technicianId,
+          type: attendances.type,
+          status: attendances.status,
+          startedAt: attendances.startedAt,
+          finishedAt: attendances.finishedAt,
+          updatedAt: attendances.updatedAt,
+        });
+
+      await appendAuditLog(db, {
+        tableName: "attendances",
+        recordId: row.id,
+        action: "BULK_UPDATE",
+        oldData: row,
+        newData: updated,
+        userId: actorUserId,
+      });
+
+      updatedIds.push(row.id);
+    }
+
+    return {
+      success: true,
+      data: {
+        requestedCount: ids.length,
+        foundCount: existingRows.length,
+        updatedCount: updatedIds.length,
+        skippedCount: skipped.length,
+        missingIds,
+        updatedIds,
+        skipped,
+      },
+    };
   });
 
   fastify.get("/units/:id", async (request, reply) => {

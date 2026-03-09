@@ -132,3 +132,29 @@ body {
   align-items: center;
   justify-content: center;
 }
+
+/* Scrollbar alinhada ao visual EcoHeat (discreta e limpa) */
+.eco-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+.eco-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.eco-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.eco-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-2) 85%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.eco-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--brand) 45%, var(--border-2));
+  background-clip: content-box;
+}

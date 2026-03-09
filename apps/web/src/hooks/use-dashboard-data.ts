@@ -18,7 +18,16 @@ export function useDashboardData() {
                     display_name: string;
                     stats: { total: number; critical: number; success: number };
                     tasks: any[];
-                    criticalOccurrence: any | null;
+                    criticalOccurrence:
+                        | (any & {
+                            quoteDraft?: {
+                                id: string;
+                                status: string;
+                                updatedAt?: string;
+                                pendingAdminReview?: boolean;
+                            } | null;
+                        })
+                        | null;
                 };
             }>("/api/app/dashboard");
             setData(response.data);

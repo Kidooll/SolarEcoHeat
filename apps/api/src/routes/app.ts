@@ -273,6 +273,16 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
             .where(eq(systems.id, criticalOccurrence.systemId))
             .limit(1);
 
+          const [criticalQuoteDraft] = await db
+            .select({
+              id: quotes.id,
+              status: quotes.status,
+              updatedAt: quotes.updatedAt,
+            })
+            .from(quotes)
+            .where(eq(quotes.occurrenceId, criticalOccurrence.id))
+            .limit(1);
+
           criticalPayload = {
             id: criticalOccurrence.id,
             description: criticalOccurrence.description,
@@ -282,6 +292,15 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
               id: criticalSystem?.id || criticalOccurrence.systemId,
               name: criticalSystem?.name || "Sistema",
             },
+            quoteDraft: criticalQuoteDraft
+              ? {
+                  id: criticalQuoteDraft.id,
+                  status: criticalQuoteDraft.status,
+                  updatedAt: criticalQuoteDraft.updatedAt,
+                  pendingAdminReview:
+                    criticalQuoteDraft.status === "rascunho" || criticalQuoteDraft.status === "enviado",
+                }
+              : null,
           };
         }
 
@@ -1010,6 +1029,13 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const { id } = request.params as { id: string };
+      const body = request.body as {
+        handoff?: {
+          urgency?: "baixa" | "media" | "alta";
+          customerContext?: string | null;
+          recommendedScope?: string | null;
+        };
+      };
 
       try {
         const [occurrenceRow] = await db
@@ -1092,6 +1118,26 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
         const issueDate = new Date();
         const validUntil = new Date(issueDate);
         validUntil.setDate(validUntil.getDate() + 15);
+        const normalizedUrgency =
+          body?.handoff?.urgency === "alta" || body?.handoff?.urgency === "media" || body?.handoff?.urgency === "baixa"
+            ? body.handoff.urgency
+            : "media";
+
+        const handoffPayload = {
+          urgency: normalizedUrgency,
+          customerContext: (body?.handoff?.customerContext || "").trim(),
+          recommendedScope: (body?.handoff?.recommendedScope || "").trim(),
+        };
+        const handoffText = [
+          "ORIGEM: PWA_OCORRENCIA_CRITICA",
+          "RASCUNHO_INICIADO_POR_TECNICO: SIM",
+          `PWA_HANDOFF_URGENCY: ${handoffPayload.urgency.toUpperCase()}`,
+          handoffPayload.customerContext ? `PWA_HANDOFF_CUSTOMER_CONTEXT: ${handoffPayload.customerContext}` : "",
+          handoffPayload.recommendedScope ? `PWA_HANDOFF_RECOMMENDED_SCOPE: ${handoffPayload.recommendedScope}` : "",
+          `PWA_HANDOFF_JSON: ${JSON.stringify(handoffPayload)}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
 
         const [createdQuote] = await db
           .insert(quotes)
@@ -1108,7 +1154,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
             grandTotal: "0.00",
             materialsIncluded: false,
             status: "rascunho",
-            notes: "ORIGEM: PWA_OCORRENCIA_CRITICA\nRASCUNHO_INICIADO_POR_TECNICO: SIM",
+            notes: handoffText,
           })
           .returning({
             id: quotes.id,

@@ -170,6 +170,7 @@ interface FinanceFormState {
   categoryId: string;
   clientId: string;
   supplierId: string;
+  supplierName: string;
   notes: string;
   markAsPaid: boolean;
   installmentsCount: number;
@@ -259,6 +260,7 @@ function makeDefaultForm(type: TxType): FinanceFormState {
     categoryId: "",
     clientId: "",
     supplierId: "",
+    supplierName: "",
     notes: "",
     markAsPaid: false,
     installmentsCount: 1,
@@ -321,6 +323,10 @@ export default function AdminFinancePage() {
 
   const [options, setOptions] = useState<FinanceOptionsResponse["data"] | null>(null);
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const [addingSupplier, setAddingSupplier] = useState(false);
+  const [supplierSearchLoading, setSupplierSearchLoading] = useState(false);
+  const [supplierSuggestions, setSupplierSuggestions] = useState<Array<{ id: string; name: string }>>([]);
+  const [supplierSuggestOpen, setSupplierSuggestOpen] = useState(false);
   const [showFormModal, setShowFormModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -368,6 +374,42 @@ export default function AdminFinancePage() {
     const timeout = window.setTimeout(() => setSearchTerm(searchInput.trim()), 250);
     return () => window.clearTimeout(timeout);
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!showFormModal || formState.type !== "expense") {
+      setSupplierSuggestions([]);
+      setSupplierSuggestOpen(false);
+      return;
+    }
+
+    const term = formState.supplierName.trim();
+    if (term.length < 2) {
+      const local = (options?.suppliers || [])
+        .filter((supplier) => supplier.name.toLowerCase().includes(term.toLowerCase()))
+        .slice(0, 8);
+      setSupplierSuggestions(local);
+      return;
+    }
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setSupplierSearchLoading(true);
+        const response = await apiFetch<{ success: boolean; data: Array<{ id: string; name: string }> }>(
+          `/api/finance/suppliers/search?q=${encodeURIComponent(term)}&limit=8`,
+        );
+        setSupplierSuggestions(response.data || []);
+      } catch {
+        const local = (options?.suppliers || [])
+          .filter((supplier) => supplier.name.toLowerCase().includes(term.toLowerCase()))
+          .slice(0, 8);
+        setSupplierSuggestions(local);
+      } finally {
+        setSupplierSearchLoading(false);
+      }
+    }, 200);
+
+    return () => window.clearTimeout(timeout);
+  }, [formState.supplierName, formState.type, options?.suppliers, showFormModal]);
 
   const ensureOptionsLoaded = useCallback(async () => {
     if (options || loadingOptions) return;
@@ -512,6 +554,8 @@ export default function AdminFinancePage() {
     setFormLockedByQuote(false);
     setFormQuoteCode("");
     setFormState(makeDefaultForm(activeTab === "pagar" ? "expense" : "income"));
+    setSupplierSuggestions([]);
+    setSupplierSuggestOpen(false);
   };
 
   const openCreateModal = async () => {
@@ -556,6 +600,7 @@ export default function AdminFinancePage() {
         categoryId: row.categoryId || "",
         clientId: row.clientId || "",
         supplierId: row.supplierId || "",
+        supplierName: row.type === "expense" ? row.partyName || "" : "",
         notes: row.notes || "",
         markAsPaid: false,
         installmentsCount: 1,
@@ -581,7 +626,10 @@ export default function AdminFinancePage() {
     try {
       setSubmitting(true);
       if (id) {
-        await apiFetch(`/api/finance/transactions/${id}/pay`, { method: "PATCH" });
+        await apiFetch(`/api/finance/transactions/${id}/pay`, {
+          method: "PATCH",
+          body: JSON.stringify({}),
+        });
       } else {
         await apiFetch("/api/finance/transactions/bulk/pay", {
           method: "POST",
@@ -632,8 +680,8 @@ export default function AdminFinancePage() {
       setError("Selecione um cliente para recebimentos.");
       return;
     }
-    if (formState.type === "expense" && !formState.supplierId && !formLockedByQuote) {
-      setError("Selecione um fornecedor para pagamentos.");
+    if (formState.type === "expense" && !formState.supplierName.trim() && !formLockedByQuote) {
+      setError("Informe o fornecedor para pagamentos.");
       return;
     }
 
@@ -658,8 +706,10 @@ export default function AdminFinancePage() {
           if (formState.type === "income") {
             payload.clientId = formState.clientId || null;
             payload.supplierId = null;
+            payload.supplierName = null;
           } else {
             payload.supplierId = formState.supplierId || null;
+            payload.supplierName = formState.supplierName.trim() || null;
             payload.clientId = null;
           }
         }
@@ -680,6 +730,7 @@ export default function AdminFinancePage() {
               categoryId: formState.categoryId || undefined,
               clientId: formState.type === "income" ? formState.clientId || null : null,
               supplierId: formState.type === "expense" ? formState.supplierId || null : null,
+              supplierName: formState.type === "expense" ? formState.supplierName.trim() || null : null,
               notes: composedNotes || null,
               markAsPaid: saveAndPay || formState.markAsPaid,
             },
@@ -758,6 +809,49 @@ export default function AdminFinancePage() {
       setError(err.message || "Falha ao cancelar contrato.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleQuickAddSupplier = async () => {
+    const supplierName = formState.supplierName.trim();
+    if (!supplierName) {
+      setError("Informe o nome do fornecedor para adicionar.");
+      return;
+    }
+
+    try {
+      setAddingSupplier(true);
+      setError("");
+      const response = await apiFetch<{
+        success: boolean;
+        data: { id: string; name: string };
+        alreadyExisted?: boolean;
+      }>("/api/finance/suppliers", {
+        method: "POST",
+        body: JSON.stringify({ name: supplierName }),
+      });
+
+      const created = response.data;
+      setFormState((prev) => ({
+        ...prev,
+        supplierId: created.id,
+        supplierName: created.name,
+      }));
+
+      setOptions((prev) => {
+        if (!prev) return prev;
+        const exists = prev.suppliers.some((item) => item.id === created.id);
+        const nextSuppliers = exists
+          ? prev.suppliers
+          : [...prev.suppliers, { id: created.id, name: created.name }].sort((a, b) =>
+              a.name.localeCompare(b.name),
+            );
+        return { ...prev, suppliers: nextSuppliers };
+      });
+    } catch (err: any) {
+      setError(err.message || "Falha ao adicionar fornecedor.");
+    } finally {
+      setAddingSupplier(false);
     }
   };
 
@@ -1671,6 +1765,7 @@ export default function AdminFinancePage() {
                         categoryId: "",
                         clientId: "",
                         supplierId: "",
+                        supplierName: "",
                       }));
                     }}
                     className="h-10 rounded border border-border bg-surface-2 px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
@@ -1778,19 +1873,58 @@ export default function AdminFinancePage() {
                 ) : (
                   <label className="flex flex-col gap-1">
                     <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3">Fornecedor</span>
-                    <select
-                      value={formState.supplierId}
-                      disabled={formLockedByQuote || loadingOptions}
-                      onChange={(event) => setFormState((prev) => ({ ...prev, supplierId: event.target.value }))}
-                      className="h-10 rounded border border-border bg-surface-2 px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
-                    >
-                      <option value="">Selecionar fornecedor</option>
-                      {(options?.suppliers || []).map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={formState.supplierName}
+                        disabled={formLockedByQuote || loadingOptions}
+                        onFocus={() => setSupplierSuggestOpen(true)}
+                        onBlur={() => window.setTimeout(() => setSupplierSuggestOpen(false), 120)}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          const matched = (options?.suppliers || []).find((supplier) => supplier.name === value);
+                          setFormState((prev) => ({
+                            ...prev,
+                            supplierName: value,
+                            supplierId: matched?.id || "",
+                          }));
+                        }}
+                        className="h-10 flex-1 rounded border border-border bg-surface-2 px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
+                        placeholder="Digite ou selecione um fornecedor"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleQuickAddSupplier}
+                        disabled={formLockedByQuote || loadingOptions || addingSupplier || !formState.supplierName.trim()}
+                        className="h-10 rounded border border-brand bg-brand px-3 text-xs font-bold text-black disabled:opacity-60"
+                      >
+                        {addingSupplier ? "..." : "Adicionar"}
+                      </button>
+                    </div>
+                    {supplierSuggestOpen && (supplierSearchLoading || supplierSuggestions.length > 0) && (
+                      <div className="rounded border border-border bg-surface-2 max-h-40 overflow-auto">
+                        {supplierSearchLoading ? (
+                          <p className="px-3 py-2 text-xs text-text-3">Buscando fornecedores...</p>
+                        ) : (
+                          supplierSuggestions.map((supplier) => (
+                            <button
+                              key={supplier.id}
+                              type="button"
+                              onMouseDown={() => {
+                                setFormState((prev) => ({
+                                  ...prev,
+                                  supplierId: supplier.id,
+                                  supplierName: supplier.name,
+                                }));
+                                setSupplierSuggestOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3"
+                            >
+                              {supplier.name}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </label>
                 )}
                 <label className="flex flex-col gap-1">

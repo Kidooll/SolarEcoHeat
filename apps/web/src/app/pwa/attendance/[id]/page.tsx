@@ -188,7 +188,11 @@ export default function AttendancePage() {
                 systemId={selectedSystemForOccurrence?.id}
                 onSaved={(payload) => {
                     if (payload?.quoteDraftId) {
-                        setOccurrenceInfo(`Ocorrência registrada. Rascunho de orçamento #${payload.quoteDraftId.slice(0, 8).toUpperCase()} enviado ao admin.`);
+                        setOccurrenceInfo(
+                            payload.quoteDraftAlreadyExisted
+                                ? `Ocorrência registrada. Orçamento #${payload.quoteDraftId.slice(0, 8).toUpperCase()} já estava em análise do admin.`
+                                : `Ocorrência registrada. Rascunho de orçamento #${payload.quoteDraftId.slice(0, 8).toUpperCase()} enviado para análise do admin.`,
+                        );
                     } else {
                         setOccurrenceInfo("Ocorrência registrada com sucesso.");
                     }

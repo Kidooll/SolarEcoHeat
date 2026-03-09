@@ -9,6 +9,7 @@ import {
     financialCategories,
     inArray,
     quotes,
+    sql,
     suppliers,
     transactions,
 } from "@solarecoheat/db";
@@ -191,6 +192,43 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             .returning({ id: financialCategories.id });
 
         return created.id;
+    }
+
+    async function resolveSupplierId(
+        tx: typeof db,
+        supplierId: string | null | undefined,
+        supplierName: string | null | undefined,
+    ) {
+        const trimmedId = (supplierId || "").trim();
+        if (trimmedId) {
+            const [existingById] = await tx
+                .select({ id: suppliers.id })
+                .from(suppliers)
+                .where(eq(suppliers.id, trimmedId))
+                .limit(1);
+            if (existingById?.id) return existingById.id;
+        }
+
+        const trimmedName = (supplierName || "").trim();
+        if (!trimmedName) return null;
+
+        const [existingByName] = await tx
+            .select({ id: suppliers.id })
+            .from(suppliers)
+            .where(sql`lower(${suppliers.name}) = lower(${trimmedName})`)
+            .limit(1);
+
+        if (existingByName?.id) return existingByName.id;
+
+        const [createdSupplier] = await tx
+            .insert(suppliers)
+            .values({
+                name: trimmedName,
+                status: "active",
+            })
+            .returning({ id: suppliers.id });
+
+        return createdSupplier.id;
     }
 
     async function loadEnrichedTransactions(now = new Date()): Promise<EnrichedTransaction[]> {
@@ -479,6 +517,55 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                 })),
             },
         };
+    });
+
+    // Cadastro rápido de fornecedor para uso no formulário financeiro
+    fastify.post("/suppliers", async (request, reply) => {
+        const body = (request.body || {}) as { name?: string | null };
+        const name = (body.name || "").trim();
+        if (!name) {
+            return reply.status(400).send({ error: "Nome do fornecedor é obrigatório." });
+        }
+
+        const [existing] = await db
+            .select({ id: suppliers.id, name: suppliers.name })
+            .from(suppliers)
+            .where(sql`lower(${suppliers.name}) = lower(${name})`)
+            .limit(1);
+
+        if (existing) {
+            return { success: true, data: existing, alreadyExisted: true };
+        }
+
+        const [created] = await db
+            .insert(suppliers)
+            .values({
+                name,
+                status: "active",
+            })
+            .returning({ id: suppliers.id, name: suppliers.name });
+
+        return { success: true, data: created, alreadyExisted: false };
+    });
+
+    // Busca incremental de fornecedores (autocomplete)
+    fastify.get("/suppliers/search", async (request) => {
+        const query = (request.query || {}) as { q?: string; limit?: string };
+        const q = (query.q || "").trim();
+        const limit = Math.min(20, Math.max(1, Number(query.limit || 8)));
+
+        if (q.length < 2) {
+            return { success: true, data: [] };
+        }
+
+        const rows = await db
+            .select({ id: suppliers.id, name: suppliers.name })
+            .from(suppliers)
+            .where(sql`lower(${suppliers.name}) like lower(${`%${q}%`})`)
+            .orderBy(suppliers.name)
+            .limit(limit);
+
+        return { success: true, data: rows };
     });
 
     // Listar contratos financeiros vinculados a clientes
@@ -1056,6 +1143,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             dueDate?: string;
             categoryId?: string;
             supplierId?: string | null;
+            supplierName?: string | null;
             clientId?: string | null;
             notes?: string;
             status?: string;
@@ -1079,6 +1167,14 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
         const txType: "income" | "expense" = body.type;
         const description = body.description.trim();
 
+        const resolvedSupplierId =
+            txType === "expense"
+                ? await resolveSupplierId(db, body.supplierId || null, body.supplierName || null)
+                : null;
+        if (txType === "expense" && !resolvedSupplierId) {
+            return reply.status(400).send({ error: "Fornecedor é obrigatório para pagamentos." });
+        }
+
         const [newTransaction] = await db.transaction(async (tx) => {
             const categoryId = body.categoryId || (await ensureDefaultCategory(tx, txType));
             const [created] = await tx
@@ -1091,7 +1187,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                     dueDate,
                     paymentDate: body.status?.toLowerCase() === "paid" ? new Date() : null,
                     categoryId,
-                    supplierId: body.supplierId || null,
+                    supplierId: resolvedSupplierId,
                     clientId: body.clientId || null,
                     notes: body.notes?.trim() || null,
                 })
@@ -1112,6 +1208,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                 dueDate?: string;
                 categoryId?: string;
                 supplierId?: string | null;
+                supplierName?: string | null;
                 clientId?: string | null;
                 notes?: string;
                 markAsPaid?: boolean;
@@ -1178,6 +1275,13 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             );
         }
         const composedNotes = [safeNotes, metadata.join(" · ")].filter(Boolean).join("\n");
+        const resolvedSupplierId =
+            txType === "expense"
+                ? await resolveSupplierId(db, base.supplierId || null, base.supplierName || null)
+                : null;
+        if (txType === "expense" && !resolvedSupplierId) {
+            return reply.status(400).send({ error: "Fornecedor é obrigatório para pagamentos." });
+        }
 
         const created = await db.transaction(async (tx) => {
             const categoryId = base.categoryId || (await ensureDefaultCategory(tx, txType));
@@ -1203,7 +1307,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                             dueDate: installmentDueDate,
                             paymentDate: shouldMarkPaid ? new Date() : null,
                             categoryId,
-                            supplierId: txType === "expense" ? base.supplierId || null : null,
+                            supplierId: resolvedSupplierId,
                             clientId: txType === "income" ? base.clientId || null : null,
                             notes: composedNotes || null,
                         })
@@ -1235,6 +1339,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             dueDate?: string;
             categoryId?: string;
             supplierId?: string | null;
+            supplierName?: string | null;
             clientId?: string | null;
             notes?: string | null;
             status?: "pending" | "paid" | "cancelled";
@@ -1263,6 +1368,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             body.dueDate !== undefined ||
             body.categoryId !== undefined ||
             body.supplierId !== undefined ||
+            body.supplierName !== undefined ||
             body.clientId !== undefined ||
             body.status !== undefined ||
             body.paymentDate !== undefined;
@@ -1343,8 +1449,16 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                 }
             } else {
                 updatePayload.clientId = null;
-                if (body.supplierId !== undefined) {
-                    updatePayload.supplierId = body.supplierId || null;
+                if (body.supplierId !== undefined || body.supplierName !== undefined) {
+                    const resolvedSupplierId = await resolveSupplierId(
+                        db,
+                        body.supplierId || null,
+                        body.supplierName || null,
+                    );
+                    if (!resolvedSupplierId) {
+                        return reply.status(400).send({ error: "Fornecedor é obrigatório para pagamentos." });
+                    }
+                    updatePayload.supplierId = resolvedSupplierId;
                 }
             }
         }

@@ -9,7 +9,7 @@ interface OccurrenceSheetProps {
     systemName: string;
     attendanceId?: string;
     systemId?: string;
-    onSaved?: (payload?: { occurrenceId: string; quoteDraftId?: string }) => void;
+    onSaved?: (payload?: { occurrenceId: string; quoteDraftId?: string; quoteDraftAlreadyExisted?: boolean }) => void;
 }
 
 type Severity = "ok" | "warning" | "critical";
@@ -18,6 +18,9 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
     const [severity, setSeverity] = useState<Severity>("critical");
     const [description, setDescription] = useState("");
     const [createQuoteDraft, setCreateQuoteDraft] = useState(true);
+    const [commercialUrgency, setCommercialUrgency] = useState<"baixa" | "media" | "alta">("media");
+    const [customerContext, setCustomerContext] = useState("");
+    const [recommendedScope, setRecommendedScope] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState("");
 
@@ -31,6 +34,9 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
         setDescription("");
         setSeverity("critical");
         setCreateQuoteDraft(true);
+        setCommercialUrgency("media");
+        setCustomerContext("");
+        setRecommendedScope("");
     }, [isOpen]);
 
     if (!isOpen) return null;
@@ -66,11 +72,27 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
 
             let quoteDraftId: string | undefined;
             if (severity === "critical" && createQuoteDraft) {
-                const draftResponse = await apiFetch<{ success: boolean; data: { quoteId: string } }>(
+                const draftResponse = await apiFetch<{ success: boolean; data: { quoteId: string; alreadyExisted?: boolean } }>(
                     `/api/app/occurrences/${response.data.id}/quote-draft`,
-                    { method: "POST" },
+                    {
+                        method: "POST",
+                        body: JSON.stringify({
+                            handoff: {
+                                urgency: commercialUrgency,
+                                customerContext: customerContext.trim() || null,
+                                recommendedScope: recommendedScope.trim() || null,
+                            },
+                        }),
+                    },
                 );
                 quoteDraftId = draftResponse?.data?.quoteId;
+                onSaved?.({
+                    occurrenceId: response.data.id,
+                    quoteDraftId,
+                    quoteDraftAlreadyExisted: !!draftResponse?.data?.alreadyExisted,
+                });
+                onClose();
+                return;
             }
 
             onSaved?.({ occurrenceId: response.data.id, quoteDraftId });
@@ -151,20 +173,65 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
                     </div>
 
                     {severity === "critical" && (
-                        <label className="flex items-center justify-between rounded border border-border bg-surface-2 px-3 py-2.5">
-                            <div className="flex flex-col">
-                                <span className="text-sm text-text">Gerar orçamento?</span>
-                                <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
-                                    Cria rascunho para handoff ao admin
-                                </span>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={createQuoteDraft}
-                                onChange={(e) => setCreateQuoteDraft(e.target.checked)}
-                                className="h-4 w-4 accent-brand"
-                            />
-                        </label>
+                        <div className="space-y-3">
+                            <label className="flex items-center justify-between rounded border border-border bg-surface-2 px-3 py-2.5">
+                                <div className="flex flex-col">
+                                    <span className="text-sm text-text">Gerar orçamento?</span>
+                                    <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                        Cria rascunho para handoff ao admin
+                                    </span>
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    checked={createQuoteDraft}
+                                    onChange={(e) => setCreateQuoteDraft(e.target.checked)}
+                                    className="h-4 w-4 accent-brand"
+                                />
+                            </label>
+
+                            {createQuoteDraft && (
+                                <>
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-mono font-bold text-text-3 uppercase tracking-wider">
+                                            Urgência Comercial
+                                        </label>
+                                        <select
+                                            value={commercialUrgency}
+                                            onChange={(e) => setCommercialUrgency(e.target.value as "baixa" | "media" | "alta")}
+                                            className="h-11 w-full rounded-lg border border-border bg-surface-2 px-3 text-sm text-text focus:border-brand focus-visible:outline-none"
+                                        >
+                                            <option value="baixa">Baixa</option>
+                                            <option value="media">Média</option>
+                                            <option value="alta">Alta</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-mono font-bold text-text-3 uppercase tracking-wider">
+                                            Contexto do Cliente
+                                        </label>
+                                        <textarea
+                                            value={customerContext}
+                                            onChange={(e) => setCustomerContext(e.target.value)}
+                                            className="w-full min-h-[90px] resize-none rounded-lg bg-surface-2 border border-border text-text placeholder:text-text-3/40 p-3 focus:ring-1 focus:ring-brand focus:border-brand transition-all focus-visible:outline-none"
+                                            placeholder="Impacto no cliente, urgência da operação, restrições."
+                                        />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-mono font-bold text-text-3 uppercase tracking-wider">
+                                            Recomendação Técnica
+                                        </label>
+                                        <textarea
+                                            value={recommendedScope}
+                                            onChange={(e) => setRecommendedScope(e.target.value)}
+                                            className="w-full min-h-[90px] resize-none rounded-lg bg-surface-2 border border-border text-text placeholder:text-text-3/40 p-3 focus:ring-1 focus:ring-brand focus:border-brand transition-all focus-visible:outline-none"
+                                            placeholder="Escopo sugerido para o orçamento do admin."
+                                        />
+                                    </div>
+                                </>
+                            )}
+                        </div>
                     )}
                 </div>
 

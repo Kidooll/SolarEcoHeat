@@ -83,6 +83,11 @@ export default function DashboardPage() {
                                                 variant="secondary"
                                                 className="text-xs py-2.5 h-auto min-w-[160px]"
                                                 onClick={() => {
+                                                    const quoteDraftId = data?.criticalOccurrence?.quoteDraft?.id;
+                                                    if (quoteDraftId) {
+                                                        router.push(`/admin/finance/quote/${quoteDraftId}/edit`);
+                                                        return;
+                                                    }
                                                     const occurrenceId = data?.criticalOccurrence?.id;
                                                     if (occurrenceId) {
                                                         router.push(`/admin/finance/quote/new?occurrenceId=${occurrenceId}`);
@@ -90,7 +95,7 @@ export default function DashboardPage() {
                                                 }}
                                             >
                                                 <span className="material-symbols-outlined text-[16px]">request_quote</span>
-                                                GERAR ORÇAMENTO
+                                                {data?.criticalOccurrence?.quoteDraft?.pendingAdminReview ? "EM ANÁLISE DO ADMIN" : "GERAR ORÇAMENTO"}
                                             </Button>
                                         ) : (
                                             <Button variant="secondary" className="aspect-square p-0 w-11 h-11 flex items-center justify-center">

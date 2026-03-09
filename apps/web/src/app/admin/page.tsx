@@ -295,9 +295,18 @@ export default function AdminDashboardPage() {
                                             <Button
                                                 variant="danger"
                                                 className="text-[10px] py-1.5 font-bold uppercase tracking-wider"
-                                                onClick={() => router.push(`/admin/finance/quote/new?occurrenceId=${dashboardData.criticalOccurrence.id}`)}
+                                                onClick={() => {
+                                                    const quoteDraftId = dashboardData?.criticalOccurrence?.quoteDraft?.id;
+                                                    if (quoteDraftId) {
+                                                        router.push(`/admin/finance/quote/${quoteDraftId}/edit`);
+                                                        return;
+                                                    }
+                                                    router.push(`/admin/finance/quote/new?occurrenceId=${dashboardData.criticalOccurrence.id}`);
+                                                }}
                                             >
-                                                Gerar Orçamento
+                                                {dashboardData?.criticalOccurrence?.quoteDraft?.pendingAdminReview
+                                                    ? "Em Análise do Admin"
+                                                    : "Gerar Orçamento"}
                                             </Button>
                                         </div>
                                     </div>
