@@ -95,6 +95,8 @@ export default function AdminAttendancesPage() {
   const pathname = usePathname();
   const isWebContext = pathname.startsWith("/admin/web");
   const backHref = isWebContext ? "/admin/web" : "/admin";
+  const [isDesktopViewport, setIsDesktopViewport] = useState(false);
+  const useDesktopLayout = isWebContext || isDesktopViewport;
 
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [units, setUnits] = useState<UnitOption[]>([]);
@@ -156,6 +158,14 @@ export default function AdminAttendancesPage() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const updateViewport = () => setIsDesktopViewport(media.matches);
+    updateViewport();
+    media.addEventListener("change", updateViewport);
+    return () => media.removeEventListener("change", updateViewport);
   }, []);
 
   useEffect(() => {
@@ -443,8 +453,8 @@ export default function AdminAttendancesPage() {
 
   return (
     <div className="min-h-screen bg-bg text-text pb-24">
-      <div className={isWebContext ? "p-8" : "p-0"}>
-        <div className={`mx-auto w-full ${isWebContext ? "max-w-[1180px]" : "max-w-none"}`}>
+      <div className={useDesktopLayout ? "p-6 lg:p-8" : "p-0"}>
+        <div className={`mx-auto w-full ${useDesktopLayout ? "max-w-[1320px]" : "max-w-none"}`}>
           <header className="sticky top-0 z-40 border-b border-border bg-surface/95 px-5 py-4 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -452,9 +462,11 @@ export default function AdminAttendancesPage() {
                   <span className="material-symbols-outlined">arrow_back</span>
                 </Link>
                 <div>
-                  <h1 className="text-[15px] font-bold">Programação de Atendimentos</h1>
-                  <p className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3">
-                    {isWebContext ? "Portal Web · Admin" : "Painel Mobile · Admin"}
+                  <h1 className={useDesktopLayout ? "text-lg font-bold" : "text-[15px] font-bold"}>
+                    Programação de Atendimentos
+                  </h1>
+                  <p className={`${useDesktopLayout ? "text-[11px]" : "text-[10px]"} font-mono uppercase tracking-[0.08em] text-text-3`}>
+                    {useDesktopLayout ? "Portal Web · Admin" : "Painel Mobile · Admin"}
                   </p>
                 </div>
               </div>
@@ -468,7 +480,7 @@ export default function AdminAttendancesPage() {
             </div>
           </header>
 
-          <main className={isWebContext ? "p-5 space-y-4" : "p-4 space-y-4"}>
+          <main className={useDesktopLayout ? "p-6 space-y-5" : "p-4 space-y-4"}>
             {error && <div className="rounded border border-crit/40 bg-crit/10 px-3 py-2 text-sm text-crit">{error}</div>}
             {notice && <div className="rounded border border-brand/40 bg-brand/10 px-3 py-2 text-sm text-brand">{notice}</div>}
 
@@ -856,6 +868,65 @@ export default function AdminAttendancesPage() {
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="py-16 text-center text-text-3">Nenhum atendimento encontrado.</div>
+              ) : useDesktopLayout ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="border-b border-border bg-surface-2">
+                      <tr className="text-left text-[11px] font-mono uppercase tracking-wider text-text-3">
+                        <th className="px-3 py-3">Sel.</th>
+                        <th className="px-3 py-3">Atendimento</th>
+                        <th className="px-3 py-3">Técnico</th>
+                        <th className="px-3 py-3">Tipo</th>
+                        <th className="px-3 py-3">Agendado</th>
+                        <th className="px-3 py-3">Status</th>
+                        <th className="px-3 py-3 text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((row) => (
+                        <tr key={row.id} className="border-b border-border/80 hover:bg-surface-2/60">
+                          <td className="px-3 py-3 align-top">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(row.id)}
+                              onChange={() => toggleRowSelection(row.id)}
+                              disabled={row.status === "finalizado"}
+                              className="mt-1 h-4 w-4 accent-brand"
+                            />
+                          </td>
+                          <td className="px-3 py-3">
+                            <p className="text-[11px] font-mono text-text-3">#{row.id.slice(0, 8).toUpperCase()}</p>
+                            <p className="mt-1 font-semibold text-text">{row.unitName}</p>
+                            <p className="text-xs text-text-3">{row.clientName}</p>
+                          </td>
+                          <td className="px-3 py-3">
+                            <p className="font-medium text-text">{row.technicianName}</p>
+                            {row.technicianEmail && <p className="text-xs text-text-3">{row.technicianEmail}</p>}
+                          </td>
+                          <td className="px-3 py-3 text-text-2">{row.type}</td>
+                          <td className="px-3 py-3 text-text-2">
+                            {row.scheduledFor ? new Date(row.scheduledFor).toLocaleString("pt-BR") : "-"}
+                          </td>
+                          <td className="px-3 py-3">
+                            <span className="rounded border border-brand/30 bg-brand/10 px-2 py-1 text-[10px] font-mono uppercase text-brand">
+                              {row.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => startEdit(row)}
+                              disabled={row.status === "finalizado"}
+                              className="h-8 rounded border border-border px-3 text-[11px] font-mono uppercase text-text-2 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Editar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <div className="divide-y divide-border">
                   {filtered.map((row) => (
@@ -911,7 +982,7 @@ export default function AdminAttendancesPage() {
         </div>
       </div>
 
-      {!isWebContext && <BottomNav role="admin" />}
+      {!useDesktopLayout && <BottomNav role="admin" />}
     </div>
   );
 }

@@ -18,9 +18,31 @@ type BuildServerOptions = {
   modules?: Array<"sync" | "finance" | "reports" | "admin" | "app" | "auth">;
 };
 
+function getAllowedOrigins() {
+  const envOrigins = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const defaults = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://ecoheatweb.vercel.app",
+  ];
+
+  return Array.from(new Set([...defaults, ...envOrigins]));
+}
+
+function isAllowedOrigin(origin: string, allowlist: string[]) {
+  if (allowlist.includes(origin)) return true;
+  // Vercel preview deployments for the web frontend
+  return /^https:\/\/ecoheatweb-[a-z0-9-]+\.vercel\.app$/i.test(origin);
+}
+
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
   const isTestMode = !!options.testUser;
   const modules = options.modules ?? ["sync", "finance", "reports", "admin", "app", "auth"];
+  const allowedOrigins = getAllowedOrigins();
 
   const server: FastifyInstance = fastify({
     logger: isTestMode
@@ -37,9 +59,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   server.register(cors, {
-    origin: "*",
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (isAllowedOrigin(origin, allowedOrigins)) return callback(null, true);
+      return callback(null, false);
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
 
   if (isTestMode) {
