@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from "fastify";
 import { db, sql } from "@solarecoheat/db";
 import { getUserRole } from "../lib/auth";
+import { createHash } from "node:crypto";
 
 type AuthSessionRow = {
   id: string;
@@ -13,6 +14,90 @@ type AuthSessionRow = {
 };
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.post("/invite/accept", { preValidation: [fastify.authenticate] }, async (request, reply) => {
+    if (!request.user) return;
+
+    const body = (request.body || {}) as { inviteCode?: string };
+    const inviteCode = String(body.inviteCode || "").trim();
+    if (!inviteCode) {
+      return reply.code(400).send({ success: false, error: "Código de convite é obrigatório." });
+    }
+
+    const email = String(request.user.email || "").trim().toLowerCase();
+    if (!email) {
+      return reply.code(400).send({ success: false, error: "Usuário autenticado sem e-mail válido." });
+    }
+
+    const tokenHash = createHash("sha256").update(inviteCode).digest("hex");
+
+    try {
+      const inviteResult = await db.execute(sql`
+        select id, email, role, client_id, status, expires_at
+        from access_invites
+        where token_hash = ${tokenHash}
+          and status = 'pending'
+        limit 1
+      `);
+      const inviteRows = Array.isArray((inviteResult as any).rows) ? (inviteResult as any).rows : (inviteResult as any);
+      const invite = Array.isArray(inviteRows) ? inviteRows[0] : null;
+
+      if (!invite) {
+        return reply.code(404).send({ success: false, error: "Convite inválido ou já utilizado." });
+      }
+      if (String(invite.email || "").toLowerCase() !== email) {
+        return reply.code(403).send({ success: false, error: "Convite não pertence ao usuário autenticado." });
+      }
+      if (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now()) {
+        return reply.code(400).send({ success: false, error: "Convite expirado." });
+      }
+
+      const targetRole = String(invite.role || "").toLowerCase();
+      const targetClientId = invite.client_id ? String(invite.client_id) : null;
+
+      await db.execute(sql`
+        insert into profiles (id, email, full_name, role, client_id, is_active, created_at, updated_at)
+        values (
+          ${request.user.id}::uuid,
+          ${request.user.email || null},
+          ${request.user.user_metadata?.full_name || request.user.user_metadata?.name || null},
+          ${targetRole},
+          ${targetClientId}::uuid,
+          true,
+          now(),
+          now()
+        )
+        on conflict (id) do update
+          set
+            email = excluded.email,
+            role = excluded.role,
+            client_id = excluded.client_id,
+            is_active = true,
+            updated_at = now()
+      `);
+
+      await db.execute(sql`
+        update access_invites
+        set
+          status = 'accepted',
+          accepted_by = ${request.user.id}::uuid,
+          accepted_at = now(),
+          updated_at = now()
+        where id = ${invite.id}::uuid
+      `);
+
+      return reply.send({
+        success: true,
+        data: {
+          role: targetRole,
+          clientId: targetClientId,
+        },
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Falha ao aceitar convite");
+      return reply.code(500).send({ success: false, error: "Falha ao aceitar convite." });
+    }
+  });
+
   fastify.get("/sessions", { preValidation: [fastify.authenticate] }, async (request, reply) => {
     if (!request.user) return;
 

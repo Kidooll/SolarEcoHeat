@@ -5,7 +5,7 @@ function getApiBaseUrl() {
 }
 
 export async function serverApiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { session },
   } = await supabase.auth.getSession();

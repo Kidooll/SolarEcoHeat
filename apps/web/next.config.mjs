@@ -4,11 +4,12 @@ import withPWA from "next-pwa";
 const nextConfig = {
     reactStrictMode: true,
     transpilePackages: ["@solarecoheat/validators", "@solarecoheat/db"],
+    pwa: {
+        dest: "public",
+        disable: process.env.NODE_ENV === "development",
+        register: true,
+        skipWaiting: true,
+    },
 };
 
-export default withPWA({
-    dest: "public",
-    disable: process.env.NODE_ENV === "development",
-    register: true,
-    skipWaiting: true,
-})(nextConfig);
+export default withPWA(nextConfig);

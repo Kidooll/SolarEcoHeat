@@ -26,10 +26,11 @@ type SystemDetailResponse = {
   };
 };
 
-export default async function WebSystemDetailPage({ params }: { params: { id: string } }) {
+export default async function WebSystemDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   let response: SystemDetailResponse;
   try {
-    response = await serverApiFetch<SystemDetailResponse>(`/api/app/systems/${params.id}`);
+    response = await serverApiFetch<SystemDetailResponse>(`/api/app/systems/${id}`);
   } catch {
     return notFound();
   }
@@ -45,7 +46,7 @@ export default async function WebSystemDetailPage({ params }: { params: { id: st
             <h1 className="text-2xl font-bold leading-tight">{system.client_name} • {system.unit_name}</h1>
             <p className="text-sm text-text-3">{system.name} • {getSystemTypeLabel(system.type)}</p>
           </div>
-          <Link href={`/web/systems/${params.id}/history`} className="px-3 py-2 text-xs border border-border rounded hover:border-brand/40">
+          <Link href={`/web/systems/${id}/history`} className="px-3 py-2 text-xs border border-border rounded hover:border-brand/40">
             Ver histórico
           </Link>
         </div>

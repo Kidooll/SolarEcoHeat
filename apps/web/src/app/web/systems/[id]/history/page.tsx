@@ -26,10 +26,11 @@ type HistoryResponse = {
   };
 };
 
-export default async function WebSystemHistoryPage({ params }: { params: { id: string } }) {
+export default async function WebSystemHistoryPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   let response: HistoryResponse;
   try {
-    response = await serverApiFetch<HistoryResponse>(`/api/app/systems/${params.id}/history`);
+    response = await serverApiFetch<HistoryResponse>(`/api/app/systems/${id}/history`);
   } catch {
     return notFound();
   }
@@ -68,7 +69,7 @@ export default async function WebSystemHistoryPage({ params }: { params: { id: s
         </section>
 
         <div className="flex gap-4 text-xs">
-          <Link href={`/web/systems/${params.id}`} className="text-brand underline">Voltar sistema</Link>
+          <Link href={`/web/systems/${id}`} className="text-brand underline">Voltar sistema</Link>
           <Link href="/web/systems" className="text-brand underline">Voltar lista</Link>
         </div>
       </main>

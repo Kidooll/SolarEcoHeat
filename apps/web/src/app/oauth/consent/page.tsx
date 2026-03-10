@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 export default async function OAuthConsentPage({
     searchParams,
 }: {
-    searchParams: { client_id?: string; scope?: string; redirect_uri?: string };
+    searchParams: Promise<{ client_id?: string; scope?: string; redirect_uri?: string }>;
 }) {
-    const supabase = createClient();
+    const supabase = await createClient();
+    const query = await searchParams;
     const {
         data: { user },
     } = await supabase.auth.getUser();
@@ -17,8 +18,8 @@ export default async function OAuthConsentPage({
         redirect(`/?next=/oauth/consent`);
     }
 
-    const clientId = searchParams.client_id || "Aplicação Desconhecida";
-    const scopes = searchParams.scope?.split(" ") || ["perfil"];
+    const clientId = query.client_id || "Aplicação Desconhecida";
+    const scopes = query.scope?.split(" ") || ["perfil"];
 
     return (
         <main className="min-h-screen bg-bg flex flex-col items-center justify-center p-4">
@@ -56,8 +57,8 @@ export default async function OAuthConsentPage({
                     <div className="pt-4 border-t border-border-2 space-y-3">
                         <form action="/auth/authorize" method="POST">
                             {/* Inputs ocultos para manter o contexto do OAuth no redirect */}
-                            <input type="hidden" name="client_id" value={searchParams.client_id} />
-                            <input type="hidden" name="redirect_uri" value={searchParams.redirect_uri} />
+                            <input type="hidden" name="client_id" value={query.client_id} />
+                            <input type="hidden" name="redirect_uri" value={query.redirect_uri} />
 
                             <Button type="submit" variant="primary" className="w-full">
                                 Autorizar Acesso

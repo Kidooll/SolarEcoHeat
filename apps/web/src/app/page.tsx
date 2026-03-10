@@ -71,6 +71,26 @@ export default function LoginPage() {
         }
     };
 
+    const handleOAuthLogin = async () => {
+        setIsLoading(true);
+        setErrorText("");
+        try {
+            const supabase = createClient();
+            const redirectToBase = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+            const callbackUrl = `${redirectToBase.replace(/\/+$/, "")}/auth/callback${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ""}`;
+            const { error } = await supabase.auth.signInWithOAuth({
+                provider: "google",
+                options: {
+                    redirectTo: callbackUrl,
+                },
+            });
+            if (error) throw error;
+        } catch (err: any) {
+            setErrorText(err?.message || "Falha no login OAuth.");
+            setIsLoading(false);
+        }
+    };
+
     return (
         <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display min-h-screen flex flex-col antialiased selection:bg-primary/30">
             {/* Header / Top Bar */}
@@ -151,7 +171,7 @@ export default function LoginPage() {
                             </div>
                             <span className="text-slate-600 dark:text-slate-400 group-hover:text-slate-900 dark:group-hover:text-slate-300 transition-colors">Lembrar-me</span>
                         </label>
-                        <a className="text-primary hover:text-primary/80 font-medium transition-colors" href="#">Esqueceu a senha?</a>
+                        <Link className="text-primary hover:text-primary/80 font-medium transition-colors" href="/auth/recover">Esqueceu a senha?</Link>
                     </div>
 
                     <button
@@ -165,6 +185,16 @@ export default function LoginPage() {
                             <span className="material-symbols-outlined">login</span>
                         )}
                         {isLoading ? "Autenticando..." : "Entrar no Sistema"}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={handleOAuthLogin}
+                        disabled={isLoading}
+                        className="w-full border border-border-2 text-text hover:bg-surface-2 font-bold py-3 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">account_circle</span>
+                        Entrar com Google
                     </button>
 
                     <Link
