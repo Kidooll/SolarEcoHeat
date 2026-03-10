@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
+import { getSystemTypeIcon } from "@/lib/system-type";
 
 export function useSystems() {
     const [systems, setSystems] = useState<any[]>([]);
@@ -29,7 +30,7 @@ export function useSystems() {
                 unit: s.unit_name || "Unidade não identificada",
                 status: s.state_derived || "OK",
                 lastMaintenance: "Consultar Histórico", // TODO: Buscar última data de atendimento finalizado
-                icon: getIconForType(s.type),
+                icon: getSystemTypeIcon(s.type),
                 image: getPlaceholderImage(s.type)
             }));
 
@@ -40,14 +41,6 @@ export function useSystems() {
         } finally {
             setLoading(false);
         }
-    };
-
-    const getIconForType = (type: string) => {
-        const t = type.toLowerCase();
-        if (t.includes('solar')) return 'solar_power';
-        if (t.includes('bomba') || t.includes('hidro')) return 'water_drop';
-        if (t.includes('gás')) return 'mode_fan';
-        return 'settings_input_component';
     };
 
     const getPlaceholderImage = (type: string) => {

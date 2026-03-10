@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { TimelineItem } from "@/components/ui/timeline-item";
 import { apiFetch } from "@/lib/api";
+import { getSystemTypeLabel } from "@/lib/system-type";
 
 export default function SystemHistoryPage() {
     const params = useParams();
@@ -140,7 +141,9 @@ export default function SystemHistoryPage() {
                         {Object.entries(system.identity).map(([key, value]) => (
                             <div key={key} className="bg-surface p-4 flex justify-between items-center group">
                                 <span className="text-text-3 text-xs font-mono uppercase tracking-wider">{key}</span>
-                                <span className="text-text text-sm font-semibold">{value}</span>
+                                <span className="text-text text-sm font-semibold">
+                                    {key === "type" ? getSystemTypeLabel(String(value || "")) : value}
+                                </span>
                             </div>
                         ))}
                     </div>

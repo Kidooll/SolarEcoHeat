@@ -55,6 +55,7 @@ Sem o Gotenberg, a API faz fallback para um PDF simples em texto.
 - **Banco de Memórias:** `docs/memory-bank.md`
 - **Próximos Passos:** `docs/next-steps.md`
 - **Guia UI/UX:** `docs/ui-ux-guide.md`
+- **Auth e Acessos Supabase:** `docs/auth-supabase-acessos.md`
 
 ## Fase Atual
 

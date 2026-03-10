@@ -34,6 +34,35 @@ export const clients = pgTable("clients", {
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// -- TABELA: profiles (espelho de auth.users)
+export const profiles = pgTable("profiles", {
+    id: uuid("id").primaryKey(),
+    email: text("email"),
+    fullName: text("full_name"),
+    role: varchar("role", { length: 20 }).default("technician").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// -- TABELA: access_invites (convites de acesso)
+export const accessInvites = pgTable("access_invites", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    role: varchar("role", { length: 20 }).notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdBy: uuid("created_by").references(() => profiles.id, { onDelete: "restrict" }).notNull(),
+    acceptedBy: uuid("accepted_by"),
+    acceptedAt: timestamp("accepted_at"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // -- TABELA: company_settings
 export const companySettings = pgTable("company_settings", {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -44,6 +73,8 @@ export const companySettings = pgTable("company_settings", {
     phone: varchar("phone", { length: 40 }),
     address: text("address"),
     website: varchar("website", { length: 255 }),
+    recurrenceDailyLimitTech: integer("recurrence_daily_limit_tech").default(6).notNull(),
+    recurrenceDailyLimitAdmin: integer("recurrence_daily_limit_admin").default(10).notNull(),
     updatedBy: uuid("updated_by"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -78,6 +109,7 @@ export const technicalUnits = pgTable("technical_units", {
     address: text("address").notNull(),
     maintenanceDays: jsonb("maintenance_days").default([]),
     notes: text("notes"),
+    preferredTechnicianId: uuid("preferred_technician_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -323,6 +355,7 @@ export const contracts = pgTable("contracts", {
     name: varchar("name", { length: 255 }).notNull(),
     frequency: varchar("frequency", { length: 20 }).notNull(), // semanal | mensal | bimestral | trimestral
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    preferredTechnicianId: uuid("preferred_technician_id"),
     startDate: timestamp("start_date").notNull(),
     endDate: timestamp("end_date").notNull(),
     status: varchar("status", { length: 20 }).default("active").notNull(),

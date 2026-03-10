@@ -1,8 +1,11 @@
 import { FastifyPluginAsync } from "fastify";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  accessInvites,
   attendances,
   auditLogs,
   companySettings,
+  conflictResolutionLog,
   clients,
   components,
   contracts,
@@ -25,6 +28,7 @@ import {
 } from "@solarecoheat/db";
 import { adminCreateQuoteSchema, adminQuoteStatusSchema } from "@solarecoheat/validators";
 import { ensureAdmin } from "../lib/auth";
+import { supabaseAdmin } from "../plugins/supabase";
 import {
   getCriticalAlertQueueStatus,
   listCriticalAlertFailedJobs,
@@ -32,12 +36,90 @@ import {
 } from "../lib/critical-alert-queue";
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
+  const ALLOWED_SYSTEM_TYPES = new Set([
+    "solar",
+    "gas",
+    "eletrico",
+    "piscina",
+    "sauna",
+    "misto_tipo_1",
+    "misto_tipo_2",
+    "misto_tipo_3",
+    // Compatibilidade com bases antigas
+    "AQUECIMENTO SOLAR",
+    "BOMBAS HIDRÁULICAS",
+    "CALDEIRAS A GÁS",
+    "SISTEMA DE INCÊNDIO",
+  ]);
+
+  function normalizeSystemType(rawType: string) {
+    const value = (rawType || "").trim();
+    const lower = value.toLowerCase();
+    if (lower === "misto tipo 1" || lower === "misto 1") return "misto_tipo_1";
+    if (lower === "misto tipo 2" || lower === "misto 2") return "misto_tipo_2";
+    if (lower === "misto tipo 3" || lower === "misto 3") return "misto_tipo_3";
+    return value;
+  }
+
   function getActorUserId(request: any) {
     const raw = request?.user?.id;
     if (typeof raw === "string" && raw.trim().length > 0) {
       return raw;
     }
     return null;
+  }
+
+  function normalizeManagedRole(rawRole: unknown): "admin" | "technician" | "client" | null {
+    const role = String(rawRole || "").trim().toLowerCase();
+    if (role === "admin") return "admin";
+    if (role === "technician" || role === "tech" || role === "tecnico") return "technician";
+    if (role === "client" || role === "cliente" || role === "customer") return "client";
+    return null;
+  }
+
+  function normalizeInviteStatus(rawStatus: unknown): "pending" | "accepted" | "expired" | "revoked" | null {
+    const status = String(rawStatus || "").trim().toLowerCase();
+    if (status === "pending" || status === "accepted" || status === "expired" || status === "revoked") {
+      return status;
+    }
+    return null;
+  }
+
+  function buildInviteToken() {
+    const plain = randomBytes(32).toString("hex");
+    const hash = createHash("sha256").update(plain).digest("hex");
+    return { plain, hash };
+  }
+
+  async function dispatchSupabaseInviteEmail(input: {
+    email: string;
+    role: "admin" | "technician" | "client";
+    fullName: string | null;
+    clientId: string | null;
+    inviteCode: string;
+  }) {
+    if (!supabaseAdmin) {
+      return { sent: false as const, reason: "SUPABASE_SERVICE_ROLE_KEY não configurada" };
+    }
+
+    const redirectToBase = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const redirectTo = `${redirectToBase.replace(/\/+$/, "")}/?invite=${input.inviteCode}`;
+
+    const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
+      data: {
+        role: input.role,
+        client_id: input.clientId,
+        full_name: input.fullName || undefined,
+        invite_code: input.inviteCode,
+      },
+      redirectTo,
+    });
+
+    if (error) {
+      return { sent: false as const, reason: error.message || "Falha ao enviar e-mail de convite" };
+    }
+
+    return { sent: true as const, reason: null };
   }
 
   async function appendAuditLog(
@@ -229,6 +311,73 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     const value = new Date(date);
     value.setHours(0, 0, 0, 0);
     return value;
+  }
+
+  function normalizeComponentState(value: unknown): "OK" | "ATN" | "CRT" {
+    if (typeof value !== "string") return "OK";
+    const normalized = value.trim().toUpperCase();
+    if (normalized === "CRT" || normalized === "CRITICO") return "CRT";
+    if (normalized === "ATN" || normalized === "ATENCAO") return "ATN";
+    return "OK";
+  }
+
+  function componentStatePriority(value: "OK" | "ATN" | "CRT") {
+    if (value === "CRT") return 3;
+    if (value === "ATN") return 2;
+    return 1;
+  }
+
+  async function recalculateSystemStateDerived(systemId: string) {
+    const componentRows = await db
+      .select({ state: components.state })
+      .from(components)
+      .where(eq(components.systemId, systemId));
+
+    let nextState: "OK" | "ATN" | "CRT" = "OK";
+    for (const row of componentRows) {
+      const current = normalizeComponentState(row.state);
+      if (componentStatePriority(current) > componentStatePriority(nextState)) {
+        nextState = current;
+      }
+    }
+
+    const [updated] = await db
+      .update(systems)
+      .set({
+        stateDerived: nextState,
+        updatedAt: new Date(),
+      })
+      .where(eq(systems.id, systemId))
+      .returning({
+        id: systems.id,
+        stateDerived: systems.stateDerived,
+      });
+
+    return updated || null;
+  }
+
+  function dayKeyLocal(date: Date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function normalizeProfileRole(value: unknown): "admin" | "technician" | "other" {
+    if (typeof value !== "string") return "other";
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "admin" || normalized === "administrator") return "admin";
+    if (normalized === "tech" || normalized === "technician" || normalized === "tecnico") return "technician";
+    return "other";
+  }
+
+  function recurrenceDailyLimitByRole(
+    role: unknown,
+    limits: { recurrenceDailyLimitTech: number; recurrenceDailyLimitAdmin: number },
+  ) {
+    return normalizeProfileRole(role) === "admin"
+      ? limits.recurrenceDailyLimitAdmin
+      : limits.recurrenceDailyLimitTech;
   }
 
   async function ensureQuoteIncomeCategory(tx: typeof db) {
@@ -646,6 +795,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     phone: "",
     address: "",
     website: "",
+    recurrenceDailyLimitTech: 6,
+    recurrenceDailyLimitAdmin: 10,
   };
 
   const DEFAULT_QUOTE_TEMPLATE = {
@@ -662,22 +813,77 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     showNotes: true,
   };
 
+  function isMissingColumnError(error: unknown) {
+    const code = (error as { code?: string })?.code;
+    const message = String((error as { message?: string })?.message || "");
+    return code === "42703" || /column .* does not exist/i.test(message);
+  }
+
+  function isMissingTableError(error: unknown) {
+    const code = (error as { code?: string })?.code;
+    const message = String((error as { message?: string })?.message || "");
+    return code === "42P01" || /relation .* does not exist/i.test(message);
+  }
+
   async function getCompanySettingsData() {
-    const [settings] = await db
-      .select({
-        id: companySettings.id,
-        legalName: companySettings.legalName,
-        tradeName: companySettings.tradeName,
-        document: companySettings.document,
-        email: companySettings.email,
-        phone: companySettings.phone,
-        address: companySettings.address,
-        website: companySettings.website,
-        updatedAt: companySettings.updatedAt,
-      })
-      .from(companySettings)
-      .orderBy(desc(companySettings.updatedAt))
-      .limit(1);
+    let settings:
+      | {
+          id: string;
+          legalName: string | null;
+          tradeName: string | null;
+          document: string | null;
+          email: string | null;
+          phone: string | null;
+          address: string | null;
+          website: string | null;
+          recurrenceDailyLimitTech?: number | null;
+          recurrenceDailyLimitAdmin?: number | null;
+          updatedAt?: Date | null;
+        }
+      | undefined;
+
+    try {
+      [settings] = await db
+        .select({
+          id: companySettings.id,
+          legalName: companySettings.legalName,
+          tradeName: companySettings.tradeName,
+          document: companySettings.document,
+          email: companySettings.email,
+          phone: companySettings.phone,
+          address: companySettings.address,
+          website: companySettings.website,
+          recurrenceDailyLimitTech: companySettings.recurrenceDailyLimitTech,
+          recurrenceDailyLimitAdmin: companySettings.recurrenceDailyLimitAdmin,
+          updatedAt: companySettings.updatedAt,
+        })
+        .from(companySettings)
+        .orderBy(desc(companySettings.updatedAt))
+        .limit(1);
+    } catch (error) {
+      if (isMissingColumnError(error)) {
+        // Backward compatibility: project running before recurrence-limit migration.
+        [settings] = await db
+          .select({
+            id: companySettings.id,
+            legalName: companySettings.legalName,
+            tradeName: companySettings.tradeName,
+            document: companySettings.document,
+            email: companySettings.email,
+            phone: companySettings.phone,
+            address: companySettings.address,
+            website: companySettings.website,
+            updatedAt: companySettings.updatedAt,
+          })
+          .from(companySettings)
+          .orderBy(desc(companySettings.updatedAt))
+          .limit(1);
+      } else if (isMissingTableError(error)) {
+        return DEFAULT_COMPANY;
+      } else {
+        throw error;
+      }
+    }
 
     return settings
       ? {
@@ -689,31 +895,78 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           phone: settings.phone || DEFAULT_COMPANY.phone,
           address: settings.address || DEFAULT_COMPANY.address,
           website: settings.website || DEFAULT_COMPANY.website,
+          recurrenceDailyLimitTech: Math.max(
+            1,
+            Number(settings.recurrenceDailyLimitTech || DEFAULT_COMPANY.recurrenceDailyLimitTech),
+          ),
+          recurrenceDailyLimitAdmin: Math.max(
+            Math.max(1, Number(settings.recurrenceDailyLimitTech || DEFAULT_COMPANY.recurrenceDailyLimitTech)),
+            Number(settings.recurrenceDailyLimitAdmin || DEFAULT_COMPANY.recurrenceDailyLimitAdmin),
+          ),
           updatedAt: settings.updatedAt,
         }
       : DEFAULT_COMPANY;
   }
 
   async function getQuoteTemplateSettingsData() {
-    const [settings] = await db
-      .select({
-        id: quoteTemplateSettings.id,
-        title: quoteTemplateSettings.title,
-        footerText: quoteTemplateSettings.footerText,
-        primaryColor: quoteTemplateSettings.primaryColor,
-        accentColor: quoteTemplateSettings.accentColor,
-        showLogo: quoteTemplateSettings.showLogo,
-        showCompanyDocument: quoteTemplateSettings.showCompanyDocument,
-        showCompanyAddress: quoteTemplateSettings.showCompanyAddress,
-        showCompanyContacts: quoteTemplateSettings.showCompanyContacts,
-        showWebsiteInFooter: quoteTemplateSettings.showWebsiteInFooter,
-        showClientTradeName: quoteTemplateSettings.showClientTradeName,
-        showNotes: quoteTemplateSettings.showNotes,
-        updatedAt: quoteTemplateSettings.updatedAt,
-      })
-      .from(quoteTemplateSettings)
-      .orderBy(desc(quoteTemplateSettings.updatedAt))
-      .limit(1);
+    let settings:
+      | {
+          id: string;
+          title: string | null;
+          footerText: string | null;
+          primaryColor: string | null;
+          accentColor: string | null;
+          showLogo?: boolean | null;
+          showCompanyDocument?: boolean | null;
+          showCompanyAddress?: boolean | null;
+          showCompanyContacts?: boolean | null;
+          showWebsiteInFooter?: boolean | null;
+          showClientTradeName?: boolean | null;
+          showNotes?: boolean | null;
+          updatedAt?: Date | null;
+        }
+      | undefined;
+
+    try {
+      [settings] = await db
+        .select({
+          id: quoteTemplateSettings.id,
+          title: quoteTemplateSettings.title,
+          footerText: quoteTemplateSettings.footerText,
+          primaryColor: quoteTemplateSettings.primaryColor,
+          accentColor: quoteTemplateSettings.accentColor,
+          showLogo: quoteTemplateSettings.showLogo,
+          showCompanyDocument: quoteTemplateSettings.showCompanyDocument,
+          showCompanyAddress: quoteTemplateSettings.showCompanyAddress,
+          showCompanyContacts: quoteTemplateSettings.showCompanyContacts,
+          showWebsiteInFooter: quoteTemplateSettings.showWebsiteInFooter,
+          showClientTradeName: quoteTemplateSettings.showClientTradeName,
+          showNotes: quoteTemplateSettings.showNotes,
+          updatedAt: quoteTemplateSettings.updatedAt,
+        })
+        .from(quoteTemplateSettings)
+        .orderBy(desc(quoteTemplateSettings.updatedAt))
+        .limit(1);
+    } catch (error) {
+      if (isMissingColumnError(error)) {
+        [settings] = await db
+          .select({
+            id: quoteTemplateSettings.id,
+            title: quoteTemplateSettings.title,
+            footerText: quoteTemplateSettings.footerText,
+            primaryColor: quoteTemplateSettings.primaryColor,
+            accentColor: quoteTemplateSettings.accentColor,
+            updatedAt: quoteTemplateSettings.updatedAt,
+          })
+          .from(quoteTemplateSettings)
+          .orderBy(desc(quoteTemplateSettings.updatedAt))
+          .limit(1);
+      } else if (isMissingTableError(error)) {
+        return DEFAULT_QUOTE_TEMPLATE;
+      } else {
+        throw error;
+      }
+    }
 
     return settings
       ? {
@@ -1011,11 +1264,91 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     };
   });
 
-  fastify.get("/settings/company", async () => {
+  fastify.get("/sync/conflicts", async (request) => {
+    const query = (request.query || {}) as {
+      limit?: string;
+      unresolvedOnly?: string;
+    };
+
+    const limit = Math.min(100, Math.max(1, Number(query.limit || 30)));
+    const unresolvedOnly = (query.unresolvedOnly || "false").toLowerCase() === "true";
+    const rows = await db
+      .select({
+        id: conflictResolutionLog.id,
+        entity: conflictResolutionLog.entity,
+        entityId: conflictResolutionLog.entityId,
+        clientVersion: conflictResolutionLog.clientVersion,
+        serverVersion: conflictResolutionLog.serverVersion,
+        resolvedAt: conflictResolutionLog.resolvedAt,
+        resolution: conflictResolutionLog.resolution,
+        createdAt: conflictResolutionLog.createdAt,
+      })
+      .from(conflictResolutionLog)
+      .orderBy(desc(conflictResolutionLog.createdAt))
+      .limit(limit * 3);
+
+    const filtered = unresolvedOnly
+      ? rows.filter((row) => !row.resolvedAt && !row.resolution)
+      : rows;
+
     return {
       success: true,
-      data: await getCompanySettingsData(),
+      data: filtered.slice(0, limit),
+      meta: {
+        limit,
+        unresolvedOnly,
+        returned: Math.min(limit, filtered.length),
+        totalFiltered: filtered.length,
+      },
     };
+  });
+
+  fastify.post("/sync/conflicts/:id/resolve", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body || {}) as { resolution?: string };
+    const resolution = (body.resolution || "admin_resolved").trim().toLowerCase();
+    const allowed = new Set(["admin_resolved", "server_wins", "client_retry", "ignored"]);
+
+    if (!allowed.has(resolution)) {
+      return reply.status(400).send({ error: "Resolução inválida." });
+    }
+
+    const [updated] = await db
+      .update(conflictResolutionLog)
+      .set({
+        resolution,
+        resolvedAt: new Date(),
+      })
+      .where(eq(conflictResolutionLog.id, id))
+      .returning({
+        id: conflictResolutionLog.id,
+        entity: conflictResolutionLog.entity,
+        entityId: conflictResolutionLog.entityId,
+        resolution: conflictResolutionLog.resolution,
+        resolvedAt: conflictResolutionLog.resolvedAt,
+        createdAt: conflictResolutionLog.createdAt,
+      });
+
+    if (!updated) {
+      return reply.status(404).send({ error: "Conflito não encontrado." });
+    }
+
+    return { success: true, data: updated };
+  });
+
+  fastify.get("/settings/company", async () => {
+    try {
+      return {
+        success: true,
+        data: await getCompanySettingsData(),
+      };
+    } catch (error: any) {
+      fastify.log.error({ error }, "Falha ao carregar configurações da empresa");
+      return {
+        success: true,
+        data: DEFAULT_COMPANY,
+      };
+    }
   });
 
   fastify.put("/settings/company", async (request, reply) => {
@@ -1027,11 +1360,22 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       phone?: string | null;
       address?: string | null;
       website?: string | null;
+      recurrenceDailyLimitTech?: number | string | null;
+      recurrenceDailyLimitAdmin?: number | string | null;
     };
 
     if (!body.legalName?.trim()) {
       return reply.status(400).send({ error: "Razão social é obrigatória." });
     }
+
+    const recurrenceDailyLimitTech = Math.max(
+      1,
+      Number(body.recurrenceDailyLimitTech || DEFAULT_COMPANY.recurrenceDailyLimitTech),
+    );
+    const recurrenceDailyLimitAdmin = Math.max(
+      recurrenceDailyLimitTech,
+      Number(body.recurrenceDailyLimitAdmin || DEFAULT_COMPANY.recurrenceDailyLimitAdmin),
+    );
 
     const existing = await db
       .select({ id: companySettings.id })
@@ -1046,6 +1390,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       phone: body.phone?.trim() || null,
       address: body.address?.trim() || null,
       website: body.website?.trim() || null,
+      recurrenceDailyLimitTech,
+      recurrenceDailyLimitAdmin,
       updatedAt: new Date(),
       updatedBy: request.user?.id || null,
     };
@@ -1063,6 +1409,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           phone: companySettings.phone,
           address: companySettings.address,
           website: companySettings.website,
+          recurrenceDailyLimitTech: companySettings.recurrenceDailyLimitTech,
+          recurrenceDailyLimitAdmin: companySettings.recurrenceDailyLimitAdmin,
           updatedAt: companySettings.updatedAt,
         });
 
@@ -1082,6 +1430,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         phone: companySettings.phone,
         address: companySettings.address,
         website: companySettings.website,
+        recurrenceDailyLimitTech: companySettings.recurrenceDailyLimitTech,
+        recurrenceDailyLimitAdmin: companySettings.recurrenceDailyLimitAdmin,
         updatedAt: companySettings.updatedAt,
       });
 
@@ -1089,10 +1439,18 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/settings/quote-template", async () => {
-    return {
-      success: true,
-      data: await getQuoteTemplateSettingsData(),
-    };
+    try {
+      return {
+        success: true,
+        data: await getQuoteTemplateSettingsData(),
+      };
+    } catch (error: any) {
+      fastify.log.error({ error }, "Falha ao carregar template de orçamento");
+      return {
+        success: true,
+        data: DEFAULT_QUOTE_TEMPLATE,
+      };
+    }
   });
 
   fastify.put("/settings/quote-template", async (request) => {
@@ -1376,12 +1734,17 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: "Unidade, nome e tipo são obrigatórios" });
     }
 
+    const normalizedType = normalizeSystemType(body.type);
+    if (!ALLOWED_SYSTEM_TYPES.has(normalizedType)) {
+      return reply.status(400).send({ error: "Tipo de sistema inválido." });
+    }
+
     const [system] = await db
       .insert(systems)
       .values({
         unitId: body.unitId,
         name: body.name,
-        type: body.type,
+        type: normalizedType,
         heatSources: body.heatSources ?? [],
         volume: body.volume ?? null,
         stateDerived: "OK",
@@ -1410,7 +1773,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       const result = await db.execute(sql`
         select id, full_name, email, role
         from profiles
-        where upper(coalesce(role, '')) in ('TECH', 'TECHNICIAN')
+        where upper(coalesce(role, '')) in ('TECH', 'TECHNICIAN', 'ADMIN')
         order by full_name asc nulls last, email asc nulls last
       `);
 
@@ -1419,6 +1782,617 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       fastify.log.warn({ error }, "Falha ao consultar técnicos em profiles");
       return { success: true, data: [] };
+    }
+  });
+
+  fastify.get("/profiles", async (request, reply) => {
+    const query = (request.query || {}) as {
+      role?: string;
+      clientId?: string;
+      search?: string;
+      limit?: string;
+    };
+    const roleFilter = (query.role || "").trim().toLowerCase();
+    const clientIdFilter = (query.clientId || "").trim();
+    const search = (query.search || "").trim().toLowerCase();
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 100)));
+
+    try {
+      const result = await db.execute(sql`
+        select
+          p.id,
+          p.email,
+          p.full_name,
+          p.role,
+          p.client_id,
+          p.is_active,
+          p.created_at,
+          p.updated_at,
+          c.name as client_name
+        from profiles p
+        left join clients c on c.id = p.client_id
+        order by p.updated_at desc
+        limit ${limit}
+      `);
+      const rows = Array.isArray((result as any).rows) ? (result as any).rows : (result as any);
+      const list = (Array.isArray(rows) ? rows : []).filter((row: any) => {
+        if (roleFilter && (row.role || "").toLowerCase() !== roleFilter) return false;
+        if (clientIdFilter && row.client_id !== clientIdFilter) return false;
+        if (!search) return true;
+        const haystack = `${row.email || ""} ${row.full_name || ""} ${row.role || ""} ${row.client_name || ""}`
+          .toLowerCase()
+          .trim();
+        return haystack.includes(search);
+      });
+
+      return {
+        success: true,
+        data: list,
+        meta: {
+          limit,
+          returned: list.length,
+        },
+      };
+    } catch (error) {
+      fastify.log.warn({ error }, "Falha ao listar profiles");
+      return reply.status(500).send({
+        success: false,
+        error:
+          "Falha ao listar perfis. Verifique se a migração de profiles foi executada (supabase/0009_profiles.sql).",
+      });
+    }
+  });
+
+  fastify.patch("/profiles/:id", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const { id } = request.params as { id: string };
+    const body = (request.body || {}) as {
+      role?: string | null;
+      clientId?: string | null;
+      isActive?: boolean | null;
+      fullName?: string | null;
+    };
+
+    const allowedRoles = new Set(["admin", "technician", "client"]);
+    const roleValue = body.role === undefined || body.role === null ? undefined : String(body.role).trim().toLowerCase();
+    if (roleValue !== undefined && !allowedRoles.has(roleValue)) {
+      return reply.status(400).send({ error: "Role inválida. Use admin, technician ou client." });
+    }
+
+    const clientIdValue =
+      body.clientId === undefined
+        ? undefined
+        : body.clientId && String(body.clientId).trim().length > 0
+          ? String(body.clientId).trim()
+          : null;
+
+    if (roleValue === "client" && clientIdValue === null) {
+      return reply.status(400).send({ error: "Perfil client exige clientId." });
+    }
+
+    if (clientIdValue) {
+      const [clientExists] = await db.select({ id: clients.id }).from(clients).where(eq(clients.id, clientIdValue)).limit(1);
+      if (!clientExists) {
+        return reply.status(404).send({ error: "Cliente não encontrado para vincular ao perfil." });
+      }
+    }
+
+    try {
+      const beforeResult = await db.execute(sql`
+        select id, email, full_name, role, client_id, is_active, updated_at
+        from profiles
+        where id = ${id}::uuid
+        limit 1
+      `);
+      const beforeRows = Array.isArray((beforeResult as any).rows) ? (beforeResult as any).rows : (beforeResult as any);
+      const before = Array.isArray(beforeRows) ? beforeRows[0] : null;
+      if (!before) {
+        return reply.status(404).send({ error: "Perfil não encontrado." });
+      }
+
+      const nextRole = roleValue ?? before.role;
+      const nextClientId = clientIdValue === undefined ? before.client_id : clientIdValue;
+      const nextIsActive =
+        body.isActive === undefined || body.isActive === null ? Boolean(before.is_active) : Boolean(body.isActive);
+      const nextFullName =
+        body.fullName === undefined || body.fullName === null ? before.full_name : String(body.fullName || "").trim();
+
+      if (nextRole === "client" && !nextClientId) {
+        return reply.status(400).send({ error: "Perfil client exige clientId." });
+      }
+
+      const updatedResult = await db.execute(sql`
+        update profiles
+        set
+          role = ${nextRole},
+          client_id = ${nextClientId}::uuid,
+          is_active = ${nextIsActive},
+          full_name = ${nextFullName || null},
+          updated_at = now()
+        where id = ${id}::uuid
+        returning id, email, full_name, role, client_id, is_active, created_at, updated_at
+      `);
+      const updatedRows = Array.isArray((updatedResult as any).rows) ? (updatedResult as any).rows : (updatedResult as any);
+      const updated = Array.isArray(updatedRows) ? updatedRows[0] : null;
+
+      await appendAuditLog(db, {
+        tableName: "profiles",
+        recordId: id,
+        action: "UPDATE",
+        oldData: before,
+        newData: updated,
+        userId: actorUserId,
+      });
+
+      return { success: true, data: updated };
+    } catch (error) {
+      fastify.log.warn({ error }, "Falha ao atualizar profile");
+      return reply.status(500).send({
+        success: false,
+        error:
+          "Falha ao atualizar perfil. Verifique se a migração de profiles foi executada (supabase/0009_profiles.sql).",
+      });
+    }
+  });
+
+  fastify.get("/users", async (request, reply) => {
+    const query = (request.query || {}) as {
+      role?: string;
+      clientId?: string;
+      isActive?: string;
+      search?: string;
+      limit?: string;
+    };
+    const roleFilter = normalizeManagedRole(query.role);
+    const clientIdFilter = (query.clientId || "").trim();
+    const search = (query.search || "").trim().toLowerCase();
+    const isActiveFilter =
+      query.isActive === undefined ? null : String(query.isActive).trim().toLowerCase() === "true";
+    const limit = Math.min(300, Math.max(1, Number(query.limit || 150)));
+
+    try {
+      const result = await db.execute(sql`
+        select
+          p.id,
+          p.email,
+          p.full_name,
+          p.role,
+          p.client_id,
+          p.is_active,
+          p.created_at,
+          p.updated_at,
+          c.name as client_name,
+          c.trade_name as client_trade_name
+        from profiles p
+        left join clients c on c.id = p.client_id
+        order by p.updated_at desc
+        limit ${limit}
+      `);
+
+      const rows = Array.isArray((result as any).rows) ? (result as any).rows : (result as any);
+      const filtered = (Array.isArray(rows) ? rows : []).filter((row: any) => {
+        if (roleFilter && String(row.role || "").toLowerCase() !== roleFilter) return false;
+        if (clientIdFilter && row.client_id !== clientIdFilter) return false;
+        if (isActiveFilter !== null && Boolean(row.is_active) !== isActiveFilter) return false;
+        if (!search) return true;
+        const haystack = `${row.email || ""} ${row.full_name || ""} ${row.role || ""} ${row.client_name || ""} ${row.client_trade_name || ""}`
+          .toLowerCase()
+          .trim();
+        return haystack.includes(search);
+      });
+
+      return {
+        success: true,
+        data: filtered.map((row: any) => ({
+          id: row.id,
+          email: row.email,
+          fullName: row.full_name,
+          role: row.role,
+          clientId: row.client_id,
+          clientName: row.client_trade_name || row.client_name || null,
+          isActive: !!row.is_active,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+        meta: {
+          returned: filtered.length,
+          limit,
+        },
+      };
+    } catch (error) {
+      fastify.log.warn({ error }, "Falha ao listar usuários");
+      return reply.status(500).send({ success: false, error: "Falha ao listar usuários." });
+    }
+  });
+
+  fastify.get("/users/invites", async (request, reply) => {
+    const query = (request.query || {}) as {
+      status?: string;
+      role?: string;
+      search?: string;
+      limit?: string;
+    };
+    const statusFilter = normalizeInviteStatus(query.status);
+    const roleFilter = normalizeManagedRole(query.role);
+    const search = (query.search || "").trim().toLowerCase();
+    const limit = Math.min(300, Math.max(1, Number(query.limit || 150)));
+
+    try {
+      const result = await db.execute(sql`
+        select
+          i.id,
+          i.email,
+          i.role,
+          i.client_id,
+          i.status,
+          i.expires_at,
+          i.created_by,
+          i.accepted_by,
+          i.accepted_at,
+          i.notes,
+          i.created_at,
+          i.updated_at,
+          c.name as client_name,
+          c.trade_name as client_trade_name,
+          p.full_name as created_by_name,
+          p.email as created_by_email
+        from access_invites i
+        left join clients c on c.id = i.client_id
+        left join profiles p on p.id = i.created_by
+        order by i.created_at desc
+        limit ${limit}
+      `);
+
+      const rows = Array.isArray((result as any).rows) ? (result as any).rows : (result as any);
+      const filtered = (Array.isArray(rows) ? rows : []).filter((row: any) => {
+        if (statusFilter && String(row.status || "").toLowerCase() !== statusFilter) return false;
+        if (roleFilter && String(row.role || "").toLowerCase() !== roleFilter) return false;
+        if (!search) return true;
+        const haystack = `${row.email || ""} ${row.role || ""} ${row.client_name || ""} ${row.client_trade_name || ""} ${row.created_by_name || ""}`
+          .toLowerCase()
+          .trim();
+        return haystack.includes(search);
+      });
+
+      return {
+        success: true,
+        data: filtered.map((row: any) => ({
+          id: row.id,
+          email: row.email,
+          role: row.role,
+          clientId: row.client_id,
+          clientName: row.client_trade_name || row.client_name || null,
+          status: row.status,
+          expiresAt: row.expires_at,
+          createdBy: row.created_by,
+          createdByName: row.created_by_name,
+          createdByEmail: row.created_by_email,
+          acceptedBy: row.accepted_by,
+          acceptedAt: row.accepted_at,
+          notes: row.notes,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+        meta: {
+          returned: filtered.length,
+          limit,
+        },
+      };
+    } catch (error) {
+      fastify.log.warn({ error }, "Falha ao listar convites");
+      return reply.status(500).send({ success: false, error: "Falha ao listar convites." });
+    }
+  });
+
+  fastify.post("/users/invite", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const body = (request.body || {}) as {
+      email?: string;
+      fullName?: string | null;
+      role?: string;
+      clientId?: string | null;
+      notes?: string | null;
+      expiresInHours?: number | string | null;
+    };
+
+    const email = String(body.email || "").trim().toLowerCase();
+    const role = normalizeManagedRole(body.role);
+    const fullName = String(body.fullName || "").trim() || null;
+    const clientId = body.clientId && String(body.clientId).trim() ? String(body.clientId).trim() : null;
+    const notes = String(body.notes || "").trim() || null;
+    const expiresInHours = Math.min(168, Math.max(1, Number(body.expiresInHours || 24)));
+
+    if (!email || !email.includes("@")) {
+      return reply.status(400).send({ error: "E-mail inválido." });
+    }
+    if (!role) {
+      return reply.status(400).send({ error: "Perfil inválido. Use admin, technician ou client." });
+    }
+    if (role === "client" && !clientId) {
+      return reply.status(400).send({ error: "Perfil client exige clientId." });
+    }
+
+    if (clientId) {
+      const [clientExists] = await db.select({ id: clients.id }).from(clients).where(eq(clients.id, clientId)).limit(1);
+      if (!clientExists) {
+        return reply.status(404).send({ error: "Cliente não encontrado para vincular no convite." });
+      }
+    }
+
+    const existingPending = await db
+      .select({ id: accessInvites.id })
+      .from(accessInvites)
+      .where(sql`lower(${accessInvites.email}) = ${email} and ${accessInvites.role} = ${role} and ${accessInvites.status} = 'pending'`)
+      .limit(1);
+    if (existingPending.length > 0) {
+      return reply.status(409).send({ error: "Já existe convite pendente para este e-mail/perfil." });
+    }
+
+    const token = buildInviteToken();
+    const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+
+    try {
+      const [created] = await db
+        .insert(accessInvites)
+        .values({
+          email,
+          role,
+          clientId,
+          status: "pending",
+          tokenHash: token.hash,
+          expiresAt,
+          createdBy: actorUserId,
+          notes,
+        })
+        .returning({
+          id: accessInvites.id,
+          email: accessInvites.email,
+          role: accessInvites.role,
+          clientId: accessInvites.clientId,
+          status: accessInvites.status,
+          expiresAt: accessInvites.expiresAt,
+          createdBy: accessInvites.createdBy,
+          createdAt: accessInvites.createdAt,
+        });
+
+      const emailDispatch = await dispatchSupabaseInviteEmail({
+        email,
+        role,
+        fullName,
+        clientId,
+        inviteCode: token.plain,
+      });
+
+      await appendAuditLog(db, {
+        tableName: "access_invites",
+        recordId: created.id,
+        action: "CREATE",
+        oldData: null,
+        newData: {
+          ...created,
+          emailSent: emailDispatch.sent,
+          emailReason: emailDispatch.reason,
+        },
+        userId: actorUserId,
+      });
+
+      return {
+        success: true,
+        data: created,
+        delivery: {
+          sent: emailDispatch.sent,
+          reason: emailDispatch.reason,
+        },
+      };
+    } catch (error: any) {
+      fastify.log.error({ error }, "Falha ao criar convite");
+      return reply.status(500).send({ success: false, error: error?.message || "Falha ao criar convite." });
+    }
+  });
+
+  fastify.post("/users/invites/:id/resend", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+
+    const { id } = request.params as { id: string };
+    const body = (request.body || {}) as { expiresInHours?: number | string | null };
+    const expiresInHours = Math.min(168, Math.max(1, Number(body.expiresInHours || 24)));
+
+    const beforeResult = await db.execute(sql`
+      select id, email, role, client_id, status, expires_at
+      from access_invites
+      where id = ${id}::uuid
+      limit 1
+    `);
+    const beforeRows = Array.isArray((beforeResult as any).rows) ? (beforeResult as any).rows : (beforeResult as any);
+    const before = Array.isArray(beforeRows) ? beforeRows[0] : null;
+    if (!before) {
+      return reply.status(404).send({ error: "Convite não encontrado." });
+    }
+    if (String(before.status || "").toLowerCase() !== "pending") {
+      return reply.status(400).send({ error: "Somente convites pendentes podem ser reenviados." });
+    }
+
+    const token = buildInviteToken();
+    const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+
+    const [updated] = await db
+      .update(accessInvites)
+      .set({
+        tokenHash: token.hash,
+        expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(accessInvites.id, id))
+      .returning({
+        id: accessInvites.id,
+        email: accessInvites.email,
+        role: accessInvites.role,
+        clientId: accessInvites.clientId,
+        status: accessInvites.status,
+        expiresAt: accessInvites.expiresAt,
+        updatedAt: accessInvites.updatedAt,
+      });
+
+    const emailDispatch = await dispatchSupabaseInviteEmail({
+      email: updated.email,
+      role: normalizeManagedRole(updated.role) || "technician",
+      fullName: null,
+      clientId: updated.clientId || null,
+      inviteCode: token.plain,
+    });
+
+    await appendAuditLog(db, {
+      tableName: "access_invites",
+      recordId: id,
+      action: "UPDATE",
+      oldData: before,
+      newData: {
+        ...updated,
+        emailSent: emailDispatch.sent,
+        emailReason: emailDispatch.reason,
+      },
+      userId: actorUserId,
+    });
+
+    return {
+      success: true,
+      data: updated,
+      delivery: {
+        sent: emailDispatch.sent,
+        reason: emailDispatch.reason,
+      },
+    };
+  });
+
+  fastify.post("/users/:id/block", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+    const { id } = request.params as { id: string };
+
+    const beforeResult = await db.execute(sql`
+      select id, email, full_name, role, client_id, is_active
+      from profiles
+      where id = ${id}::uuid
+      limit 1
+    `);
+    const beforeRows = Array.isArray((beforeResult as any).rows) ? (beforeResult as any).rows : (beforeResult as any);
+    const before = Array.isArray(beforeRows) ? beforeRows[0] : null;
+    if (!before) {
+      return reply.status(404).send({ error: "Usuário não encontrado." });
+    }
+
+    const updatedResult = await db.execute(sql`
+      update profiles
+      set is_active = false, updated_at = now()
+      where id = ${id}::uuid
+      returning id, email, full_name, role, client_id, is_active, updated_at
+    `);
+    const updatedRows = Array.isArray((updatedResult as any).rows) ? (updatedResult as any).rows : (updatedResult as any);
+    const updated = Array.isArray(updatedRows) ? updatedRows[0] : null;
+
+    await appendAuditLog(db, {
+      tableName: "profiles",
+      recordId: id,
+      action: "BLOCK",
+      oldData: before,
+      newData: updated,
+      userId: actorUserId,
+    });
+
+    return { success: true, data: updated };
+  });
+
+  fastify.post("/users/:id/unblock", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+    const { id } = request.params as { id: string };
+
+    const beforeResult = await db.execute(sql`
+      select id, email, full_name, role, client_id, is_active
+      from profiles
+      where id = ${id}::uuid
+      limit 1
+    `);
+    const beforeRows = Array.isArray((beforeResult as any).rows) ? (beforeResult as any).rows : (beforeResult as any);
+    const before = Array.isArray(beforeRows) ? beforeRows[0] : null;
+    if (!before) {
+      return reply.status(404).send({ error: "Usuário não encontrado." });
+    }
+
+    const updatedResult = await db.execute(sql`
+      update profiles
+      set is_active = true, updated_at = now()
+      where id = ${id}::uuid
+      returning id, email, full_name, role, client_id, is_active, updated_at
+    `);
+    const updatedRows = Array.isArray((updatedResult as any).rows) ? (updatedResult as any).rows : (updatedResult as any);
+    const updated = Array.isArray(updatedRows) ? updatedRows[0] : null;
+
+    await appendAuditLog(db, {
+      tableName: "profiles",
+      recordId: id,
+      action: "UNBLOCK",
+      oldData: before,
+      newData: updated,
+      userId: actorUserId,
+    });
+
+    return { success: true, data: updated };
+  });
+
+  fastify.post("/users/:id/revoke-sessions", async (request, reply) => {
+    const actorUserId = getActorUserId(request);
+    if (!actorUserId) {
+      return reply.status(401).send({ error: "Usuário autenticado inválido." });
+    }
+    const { id } = request.params as { id: string };
+
+    try {
+      const result = await db.execute(sql`
+        update auth.sessions
+        set not_after = now()
+        where user_id = ${id}::uuid
+          and (not_after is null or not_after > now())
+      `);
+      const revokedCount = Number((result as any).count || 0);
+
+      await appendAuditLog(db, {
+        tableName: "auth.sessions",
+        recordId: id,
+        action: "REVOKE",
+        oldData: null,
+        newData: { revokedCount },
+        userId: actorUserId,
+      });
+
+      return {
+        success: true,
+        data: {
+          userId: id,
+          revokedCount,
+        },
+      };
+    } catch (error: any) {
+      fastify.log.warn({ error }, "Falha ao revogar sessões");
+      return reply.status(500).send({
+        success: false,
+        error: "Falha ao revogar sessões. Verifique permissões de escrita em auth.sessions.",
+      });
     }
   });
 
@@ -1748,21 +2722,33 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true, data: updated };
   });
 
-  fastify.get("/attendances/recurrence/preview", async (request, reply) => {
-    const query = request.query as {
-      month?: string;
-      technicianId?: string;
-    };
+  type RecurrencePlanItem = {
+    contractId: string;
+    contractName: string;
+    frequency: string;
+    clientId: string;
+    clientName: string;
+    unitId: string;
+    unitName: string;
+    scheduledFor: string;
+    technicianId: string;
+    technicianName: string;
+    preferredSource: "contract" | "unit" | "fallback";
+    status: "ready" | "duplicate" | "conflict";
+    reason: string | null;
+  };
 
-    if (!query.technicianId) {
-      return reply.status(400).send({ error: "Selecione um técnico para pré-visualizar a recorrência." });
-    }
-
-    const bounds = parseMonthBounds(query.month || new Date().toISOString().slice(0, 7));
+  async function buildRecurrencePlan(input: {
+    month: string;
+    fallbackTechnicianId: string;
+    contractId?: string;
+  }) {
+    const bounds = parseMonthBounds(input.month);
     if (!bounds) {
-      return reply.status(400).send({ error: "Mês inválido. Use o formato YYYY-MM." });
+      throw new Error("Mês inválido. Use o formato YYYY-MM.");
     }
 
+    const companySettingsData = await getCompanySettingsData();
     const contractRows = await db
       .select({
         id: contracts.id,
@@ -1772,6 +2758,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         startDate: contracts.startDate,
         endDate: contracts.endDate,
         status: contracts.status,
+        preferredTechnicianId: contracts.preferredTechnicianId,
       })
       .from(contracts)
       .where(eq(contracts.status, "active"))
@@ -1779,6 +2766,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       .limit(500);
 
     const activeContracts = contractRows.filter((contract) => {
+      if (input.contractId && contract.id !== input.contractId) return false;
       const start = new Date(contract.startDate);
       const end = new Date(contract.endDate);
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
@@ -1786,13 +2774,14 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     const clientIds = Array.from(new Set(activeContracts.map((row) => row.clientId).filter(Boolean))) as string[];
-    const [unitRows, clientRows, technicianAttendances, monthAttendances] = await Promise.all([
+    const [unitRows, clientRows, monthAttendances] = await Promise.all([
       clientIds.length
         ? db
             .select({
               id: technicalUnits.id,
               clientId: technicalUnits.clientId,
               name: technicalUnits.name,
+              preferredTechnicianId: technicalUnits.preferredTechnicianId,
             })
             .from(technicalUnits)
             .where(inArray(technicalUnits.clientId, clientIds))
@@ -1813,46 +2802,83 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           unitId: attendances.unitId,
           status: attendances.status,
           startedAt: attendances.startedAt,
-        })
-        .from(attendances)
-        .where(eq(attendances.technicianId, query.technicianId))
-        .orderBy(desc(attendances.startedAt))
-        .limit(1000),
-      db
-        .select({
-          id: attendances.id,
-          unitId: attendances.unitId,
-          status: attendances.status,
-          startedAt: attendances.startedAt,
           technicianId: attendances.technicianId,
           type: attendances.type,
         })
         .from(attendances)
         .where(sql`${attendances.startedAt} >= ${bounds.start} AND ${attendances.startedAt} < ${bounds.end}`)
-        .limit(1500),
+        .limit(2000),
     ]);
 
-    const unitsByClient = new Map<string, Array<{ id: string; name: string }>>();
+    const preferredTechIds = new Set<string>();
+    preferredTechIds.add(input.fallbackTechnicianId);
+    for (const row of activeContracts) {
+      if (row.preferredTechnicianId) preferredTechIds.add(row.preferredTechnicianId);
+    }
+    for (const row of unitRows) {
+      if (row.preferredTechnicianId) preferredTechIds.add(row.preferredTechnicianId);
+    }
+    const technicianIds = Array.from(preferredTechIds);
+    let technicianProfileRows: any[] = [];
+    if (technicianIds.length) {
+      try {
+        const technicianProfileResult = await db.execute(sql`
+          select id, role, full_name, email
+          from profiles
+          where id = any(${technicianIds}::uuid[])
+        `);
+        technicianProfileRows = Array.isArray((technicianProfileResult as any).rows)
+          ? (technicianProfileResult as any).rows
+          : (technicianProfileResult as any);
+      } catch (error) {
+        fastify.log.warn({ error }, "Falha ao carregar profiles para recorrência.");
+      }
+    }
+    const technicianRoleMap = new Map<string, string | null>();
+    const technicianNameMap = new Map<string, string>();
+    for (const row of technicianProfileRows || []) {
+      const id = typeof row.id === "string" ? row.id : null;
+      if (!id) continue;
+      technicianRoleMap.set(id, row.role || null);
+      const label = row.full_name || row.email || "Técnico";
+      technicianNameMap.set(id, label);
+    }
+
+    const getDailyLimit = (technicianId: string) =>
+      recurrenceDailyLimitByRole(technicianRoleMap.get(technicianId), {
+        recurrenceDailyLimitTech: companySettingsData.recurrenceDailyLimitTech,
+        recurrenceDailyLimitAdmin: companySettingsData.recurrenceDailyLimitAdmin,
+      });
+
+    const unitsByClient = new Map<
+      string,
+      Array<{ id: string; name: string; preferredTechnicianId: string | null }>
+    >();
     for (const unit of unitRows) {
       const list = unitsByClient.get(unit.clientId) || [];
-      list.push({ id: unit.id, name: unit.name });
+      list.push({ id: unit.id, name: unit.name, preferredTechnicianId: unit.preferredTechnicianId || null });
       unitsByClient.set(unit.clientId, list);
     }
+
     const clientMap = new Map(clientRows.map((row) => [row.id, row.tradeName || row.name]));
+    const scheduledCountByDayByTech = new Map<string, number>();
+    const monthlyActiveByTech = new Map<string, Array<(typeof monthAttendances)[number]>>();
 
-    const planned: Array<{
-      contractId: string;
-      contractName: string;
-      frequency: string;
-      clientId: string;
-      clientName: string;
-      unitId: string;
-      unitName: string;
-      scheduledFor: string;
-      status: "ready" | "duplicate" | "conflict";
-      reason: string | null;
-    }> = [];
+    for (const row of monthAttendances) {
+      if (!row.startedAt) continue;
+      if (row.status !== "agendado" && row.status !== "em_andamento") continue;
+      const techId = row.technicianId;
+      if (techId) {
+        const key = `${techId}:${dayKeyLocal(new Date(row.startedAt))}`;
+        scheduledCountByDayByTech.set(key, (scheduledCountByDayByTech.get(key) || 0) + 1);
+        const list = monthlyActiveByTech.get(techId) || [];
+        list.push(row);
+        monthlyActiveByTech.set(techId, list);
+      }
+    }
+    const plannedReadyByDayByTech = new Map<string, number>();
 
+    const planned: RecurrencePlanItem[] = [];
     for (const contract of activeContracts) {
       const frequency = normalizeContractFrequency(contract.frequency);
       if (!frequency) continue;
@@ -1873,15 +2899,26 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         });
 
         for (const unit of unitList) {
+          const resolvedTechnicianId =
+            contract.preferredTechnicianId || unit.preferredTechnicianId || input.fallbackTechnicianId;
+          const preferredSource = contract.preferredTechnicianId
+            ? "contract"
+            : unit.preferredTechnicianId
+              ? "unit"
+              : "fallback";
+          const dailyLimit = getDailyLimit(resolvedTechnicianId);
+          const scheduledDayKey = dayKeyLocal(scheduled);
+          const countKey = `${resolvedTechnicianId}:${scheduledDayKey}`;
+          const technicianRows = monthlyActiveByTech.get(resolvedTechnicianId) || [];
+
           const duplicate = existingSameDayByUnit.find(
             (row) =>
               row.unitId === unit.id &&
-              ((row.type || "").toLowerCase() === "preventiva_contrato" || row.technicianId === query.technicianId),
+              ((row.type || "").toLowerCase() === "preventiva_contrato" || row.technicianId === resolvedTechnicianId),
           );
 
-          const technicianConflict = technicianAttendances.find((row) => {
+          const technicianConflict = technicianRows.find((row) => {
             if (!row.startedAt) return false;
-            if (row.status !== "agendado" && row.status !== "em_andamento") return false;
             return hasScheduleConflict(scheduled, new Date(row.startedAt));
           });
 
@@ -1891,9 +2928,20 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           if (duplicate) {
             status = "duplicate";
             reason = "Já existe atendimento recorrente para esta unidade no mesmo dia.";
-          } else if (technicianConflict) {
-            status = "conflict";
-            reason = "Conflito de agenda com outro atendimento do técnico.";
+          } else {
+            const currentDailyCount =
+              (scheduledCountByDayByTech.get(countKey) || 0) + (plannedReadyByDayByTech.get(countKey) || 0);
+            if (currentDailyCount >= dailyLimit) {
+              status = "conflict";
+              reason = `Limite diário do técnico atingido (${dailyLimit} atendimentos).`;
+            } else if (technicianConflict) {
+              status = "conflict";
+              reason = "Conflito de agenda com outro atendimento do técnico.";
+            }
+          }
+
+          if (status === "ready") {
+            plannedReadyByDayByTech.set(countKey, (plannedReadyByDayByTech.get(countKey) || 0) + 1);
           }
 
           planned.push({
@@ -1905,6 +2953,9 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             unitId: unit.id,
             unitName: unit.name,
             scheduledFor: scheduled.toISOString(),
+            technicianId: resolvedTechnicianId,
+            technicianName: technicianNameMap.get(resolvedTechnicianId) || "Técnico",
+            preferredSource,
             status,
             reason,
           });
@@ -1923,7 +2974,31 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       { total: 0, ready: 0, duplicate: 0, conflict: 0 },
     );
 
-    return { success: true, data: { month: query.month || new Date().toISOString().slice(0, 7), summary, items: planned } };
+    return { month: input.month, summary, items: planned };
+  }
+
+  fastify.get("/attendances/recurrence/preview", async (request, reply) => {
+    const query = request.query as {
+      month?: string;
+      technicianId?: string;
+      contractId?: string;
+    };
+
+    if (!query.technicianId) {
+      return reply.status(400).send({ error: "Selecione um técnico para pré-visualizar a recorrência." });
+    }
+
+    const month = query.month || new Date().toISOString().slice(0, 7);
+    try {
+      const plan = await buildRecurrencePlan({
+        month,
+        fallbackTechnicianId: query.technicianId,
+        contractId: query.contractId || undefined,
+      });
+      return { success: true, data: plan };
+    } catch (error: any) {
+      return reply.status(400).send({ error: error?.message || "Falha ao montar prévia de recorrência." });
+    }
   });
 
   fastify.post("/attendances/recurrence/publish", async (request, reply) => {
@@ -1935,6 +3010,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     const body = request.body as {
       month?: string;
       technicianId?: string;
+      contractId?: string;
       onlyReady?: boolean;
       selectedKeys?: string[];
     };
@@ -1943,175 +3019,17 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: "Selecione um técnico para publicar recorrência." });
     }
 
-    const bounds = parseMonthBounds(body.month || new Date().toISOString().slice(0, 7));
-    if (!bounds) {
-      return reply.status(400).send({ error: "Mês inválido. Use o formato YYYY-MM." });
-    }
-
     const previewQueryMonth = body.month || new Date().toISOString().slice(0, 7);
-    const previewResponse = await (async () => {
-      const contractRows = await db
-        .select({
-          id: contracts.id,
-          clientId: contracts.clientId,
-          name: contracts.name,
-          frequency: contracts.frequency,
-          startDate: contracts.startDate,
-          endDate: contracts.endDate,
-          status: contracts.status,
-        })
-        .from(contracts)
-        .where(eq(contracts.status, "active"))
-        .orderBy(desc(contracts.createdAt))
-        .limit(500);
-
-      const activeContracts = contractRows.filter((contract) => {
-        const start = new Date(contract.startDate);
-        const end = new Date(contract.endDate);
-        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
-        return end.getTime() >= bounds.start.getTime() && start.getTime() < bounds.end.getTime();
+    let previewResponse: { month: string; summary: { total: number; ready: number; duplicate: number; conflict: number }; items: RecurrencePlanItem[] };
+    try {
+      previewResponse = await buildRecurrencePlan({
+        month: previewQueryMonth,
+        fallbackTechnicianId: body.technicianId,
+        contractId: body.contractId || undefined,
       });
-
-      const clientIds = Array.from(new Set(activeContracts.map((row) => row.clientId).filter(Boolean))) as string[];
-      const [unitRows, clientRows, technicianAttendances, monthAttendances] = await Promise.all([
-        clientIds.length
-          ? db
-              .select({
-                id: technicalUnits.id,
-                clientId: technicalUnits.clientId,
-                name: technicalUnits.name,
-              })
-              .from(technicalUnits)
-              .where(inArray(technicalUnits.clientId, clientIds))
-          : Promise.resolve([]),
-        clientIds.length
-          ? db
-              .select({
-                id: clients.id,
-                name: clients.name,
-                tradeName: clients.tradeName,
-              })
-              .from(clients)
-              .where(inArray(clients.id, clientIds))
-          : Promise.resolve([]),
-        db
-          .select({
-            id: attendances.id,
-            unitId: attendances.unitId,
-            status: attendances.status,
-            startedAt: attendances.startedAt,
-          })
-          .from(attendances)
-          .where(eq(attendances.technicianId, body.technicianId!))
-          .orderBy(desc(attendances.startedAt))
-          .limit(1000),
-        db
-          .select({
-            id: attendances.id,
-            unitId: attendances.unitId,
-            status: attendances.status,
-            startedAt: attendances.startedAt,
-            technicianId: attendances.technicianId,
-            type: attendances.type,
-          })
-          .from(attendances)
-          .where(sql`${attendances.startedAt} >= ${bounds.start} AND ${attendances.startedAt} < ${bounds.end}`)
-          .limit(1500),
-      ]);
-
-      const unitsByClient = new Map<string, Array<{ id: string; name: string }>>();
-      for (const unit of unitRows) {
-        const list = unitsByClient.get(unit.clientId) || [];
-        list.push({ id: unit.id, name: unit.name });
-        unitsByClient.set(unit.clientId, list);
-      }
-      const clientMap = new Map(clientRows.map((row) => [row.id, row.tradeName || row.name]));
-
-      const planned: Array<{
-        contractId: string;
-        contractName: string;
-        frequency: string;
-        clientId: string;
-        clientName: string;
-        unitId: string;
-        unitName: string;
-        scheduledFor: string;
-        status: "ready" | "duplicate" | "conflict";
-        reason: string | null;
-      }> = [];
-
-      for (const contract of activeContracts) {
-        const frequency = normalizeContractFrequency(contract.frequency);
-        if (!frequency) continue;
-
-        const unitList = unitsByClient.get(contract.clientId) || [];
-        if (!unitList.length) continue;
-
-        const contractStart = new Date(contract.startDate);
-        const step = frequencyStepMonths(frequency);
-        for (let cycle = 0; cycle < 24; cycle += 1) {
-          const scheduled = addMonths(contractStart, cycle * step);
-          if (scheduled.getTime() < bounds.start.getTime()) continue;
-          if (scheduled.getTime() >= bounds.end.getTime()) break;
-
-          const existingSameDayByUnit = monthAttendances.filter((row) => {
-            if (!row.startedAt) return false;
-            return startOfDay(new Date(row.startedAt)).getTime() === startOfDay(scheduled).getTime();
-          });
-
-          for (const unit of unitList) {
-            const duplicate = existingSameDayByUnit.find(
-              (row) =>
-                row.unitId === unit.id &&
-                ((row.type || "").toLowerCase() === "preventiva_contrato" || row.technicianId === body.technicianId),
-            );
-
-            const technicianConflict = technicianAttendances.find((row) => {
-              if (!row.startedAt) return false;
-              if (row.status !== "agendado" && row.status !== "em_andamento") return false;
-              return hasScheduleConflict(scheduled, new Date(row.startedAt));
-            });
-
-            let status: "ready" | "duplicate" | "conflict" = "ready";
-            let reason: string | null = null;
-
-            if (duplicate) {
-              status = "duplicate";
-              reason = "Já existe atendimento recorrente para esta unidade no mesmo dia.";
-            } else if (technicianConflict) {
-              status = "conflict";
-              reason = "Conflito de agenda com outro atendimento do técnico.";
-            }
-
-            planned.push({
-              contractId: contract.id,
-              contractName: contract.name,
-              frequency,
-              clientId: contract.clientId,
-              clientName: clientMap.get(contract.clientId) || "Sem cliente",
-              unitId: unit.id,
-              unitName: unit.name,
-              scheduledFor: scheduled.toISOString(),
-              status,
-              reason,
-            });
-          }
-        }
-      }
-
-      const summary = planned.reduce(
-        (acc, item) => {
-          acc.total += 1;
-          if (item.status === "ready") acc.ready += 1;
-          if (item.status === "duplicate") acc.duplicate += 1;
-          if (item.status === "conflict") acc.conflict += 1;
-          return acc;
-        },
-        { total: 0, ready: 0, duplicate: 0, conflict: 0 },
-      );
-
-      return { month: previewQueryMonth, summary, items: planned };
-    })();
+    } catch (error: any) {
+      return reply.status(400).send({ error: error?.message || "Falha ao preparar recorrência." });
+    }
 
     const previewItems = Array.isArray(previewResponse.items) ? previewResponse.items : [];
     const selectedKeySet = new Set(
@@ -2143,7 +3061,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         .insert(attendances)
         .values({
           unitId: item.unitId,
-          technicianId: body.technicianId!,
+          technicianId: item.technicianId,
           type: "preventiva_contrato",
           status: "agendado",
           startedAt,
@@ -2162,6 +3080,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           source: "contract_recurrence_publish",
           contractId: item.contractId,
           unitId: item.unitId,
+          technicianId: item.technicianId,
+          preferredSource: item.preferredSource,
           scheduledFor: item.scheduledFor,
           type: "preventiva_contrato",
         },
@@ -2173,6 +3093,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       success: true,
       data: {
         month: body.month || new Date().toISOString().slice(0, 7),
+        contractId: body.contractId || null,
         requestedCount: candidates.length,
         createdCount: createdIds.length,
         skippedCount: skipped.length,
@@ -2551,9 +3472,14 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: "Nome e tipo do sistema são obrigatórios" });
     }
 
+    const normalizedType = normalizeSystemType(body.type);
+    if (!ALLOWED_SYSTEM_TYPES.has(normalizedType)) {
+      return reply.status(400).send({ error: "Tipo de sistema inválido." });
+    }
+
     const [system] = await db
       .insert(systems)
-      .values({ unitId: id, name: body.name, type: body.type, stateDerived: "OK" })
+      .values({ unitId: id, name: body.name, type: normalizedType, stateDerived: "OK" })
       .returning({ id: systems.id });
 
     return { success: true, data: system };
@@ -2579,11 +3505,13 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         systemId: body.systemId,
         type: body.type,
         capacity: body.capacity ?? null,
-        state: body.state ?? "OK",
+        state: normalizeComponentState(body.state),
         functionDesc: body.functionDesc ?? null,
         quantity: body.quantity ?? 1,
       })
       .returning({ id: components.id });
+
+    await recalculateSystemStateDerived(body.systemId);
 
     return { success: true, data: component };
   });
@@ -2698,7 +3626,9 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
     if (typeof body.type === "string" && body.type.trim().length > 0) nextValues.type = body.type.trim();
     if (body.capacity !== undefined) nextValues.capacity = body.capacity;
-    if (typeof body.state === "string" && body.state.trim().length > 0) nextValues.state = body.state.trim().toUpperCase();
+    if (typeof body.state === "string" && body.state.trim().length > 0) {
+      nextValues.state = normalizeComponentState(body.state);
+    }
     if (body.functionDesc !== undefined) nextValues.functionDesc = body.functionDesc;
     if (typeof body.quantity === "number" && Number.isFinite(body.quantity) && body.quantity > 0) {
       nextValues.quantity = Math.floor(body.quantity);
@@ -2728,6 +3658,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       newData: updated,
       userId: actorUserId,
     });
+
+    await recalculateSystemStateDerived(existing.systemId);
 
     return { success: true, data: updated };
   });
@@ -2770,6 +3702,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       newData: null,
       userId: actorUserId,
     });
+
+    await recalculateSystemStateDerived(existing.systemId);
 
     return { success: true, data: { id } };
   });
@@ -2836,6 +3770,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       userId: actorUserId,
     });
 
+    await recalculateSystemStateDerived(source.systemId);
+
     return { success: true, data: duplicated };
   });
 
@@ -2853,9 +3789,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         systemId: id,
         type: body.type,
         capacity: body.capacity ?? null,
-        state: body.state ?? "OK",
+        state: normalizeComponentState(body.state),
       })
       .returning({ id: components.id });
+
+    await recalculateSystemStateDerived(id);
 
     return { success: true, data: component };
   });
@@ -3688,6 +4626,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         description: quotes.description,
         executionScope: quotes.executionScope,
         status: quotes.status,
+        notes: quotes.notes,
         issueDate: quotes.issueDate,
         validUntil: quotes.validUntil,
         grandTotal: quotes.grandTotal,
@@ -3712,7 +4651,39 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    const quoteIds = rows.map((row) => row.id);
+    const txRows = quoteIds.length
+      ? await db
+          .select({
+            id: transactions.id,
+            quoteId: transactions.quoteId,
+            status: transactions.status,
+          })
+          .from(transactions)
+          .where(inArray(transactions.quoteId, quoteIds))
+      : [];
+    const txCountByQuote = new Map<string, number>();
+    for (const tx of txRows) {
+      if (!tx.quoteId) continue;
+      txCountByQuote.set(tx.quoteId, (txCountByQuote.get(tx.quoteId) || 0) + 1);
+    }
+
     const data = rows.map((row) => ({
+      ...(function () {
+        const isPwaHandoff = (row.notes || "").includes("ORIGEM: PWA_OCORRENCIA_CRITICA");
+        const linkedFinanceCount = txCountByQuote.get(row.id) || 0;
+        let handoffStage: "none" | "awaiting_admin" | "approved_financial" | "rejected" = "none";
+        if (isPwaHandoff) {
+          if (row.status === "recusado") {
+            handoffStage = "rejected";
+          } else if (row.status === "aprovado" && linkedFinanceCount > 0) {
+            handoffStage = "approved_financial";
+          } else {
+            handoffStage = "awaiting_admin";
+          }
+        }
+        return { isPwaHandoff, linkedFinanceCount, handoffStage };
+      })(),
       id: row.id,
       occurrenceId: row.occurrenceId,
       description: row.description,
@@ -3879,10 +4850,10 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     const rows = await db
       .select({
         id: clients.id,
-        name: clients.name,
+        name: sql<string>`coalesce(${clients.tradeName}, ${clients.name})`.as("name"),
       })
       .from(clients)
-      .orderBy(clients.name);
+      .orderBy(sql`coalesce(${clients.tradeName}, ${clients.name})`);
 
     return { success: true, data: rows };
   });
@@ -3892,6 +4863,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       .select({
         id: clients.id,
         name: clients.name,
+        tradeName: clients.tradeName,
         document: clients.document,
         city: clients.city,
         state: clients.state,
@@ -3899,7 +4871,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         contacts: clients.contacts,
       })
       .from(clients)
-      .orderBy(clients.name);
+      .orderBy(sql`coalesce(${clients.tradeName}, ${clients.name})`);
 
     const unitsRows = await db
       .select({
@@ -3932,6 +4904,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
     const data = clientRows.map((client) => ({
       ...client,
+      displayName: client.tradeName || client.name,
       city: client.city ?? "-",
       state: client.state ?? "--",
       contacts: client.contacts ?? [],

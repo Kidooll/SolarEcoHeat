@@ -11,6 +11,8 @@ type ClientState = "ok" | "warn" | "crit";
 type ClientRow = {
     id: string;
     name: string;
+    tradeName?: string | null;
+    displayName?: string;
     document: string;
     city: string;
     state: string;
@@ -102,7 +104,9 @@ export default function AdminClientsPage() {
         return clients.filter((client) => {
             if (filter !== "all" && client.visualState !== filter) return false;
             if (!term) return true;
+            const displayName = (client.displayName || client.tradeName || client.name || "").toLowerCase();
             return (
+                displayName.includes(term) ||
                 client.name.toLowerCase().includes(term) ||
                 client.document.toLowerCase().includes(term) ||
                 `${client.city} ${client.state}`.toLowerCase().includes(term)
@@ -200,78 +204,86 @@ export default function AdminClientsPage() {
                 </div>
 
                 <div className="rounded border border-border bg-surface overflow-hidden">
-                    <div className="overflow-x-auto">
-                        <table className="w-full min-w-[980px] border-collapse">
-                            <thead className="bg-surface-2 border-b border-border">
-                                <tr>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Cod</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Cliente</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Unidades</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Sistemas</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Estado</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Cidade / UF</th>
-                                    <th className="px-3 py-3 text-left text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Contato</th>
-                                    <th className="px-3 py-3 text-right text-[9px] font-mono uppercase tracking-[0.1em] text-text-3">Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {loading ? (
-                                    <tr>
-                                        <td colSpan={8} className="p-6">
-                                            <div className="h-16 rounded border border-border bg-surface-2 animate-pulse" />
-                                        </td>
-                                    </tr>
-                                ) : pagedRows.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={8} className="py-16 text-center">
-                                            <p className="text-text-2 text-sm font-semibold">Nenhum cliente encontrado</p>
-                                            <p className="text-text-3 text-xs mt-2">Tente ajustar os filtros ou a busca</p>
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    pagedRows.map((client, index) => {
-                                        const contact = getContactMeta(client.contacts);
-                                        const code = `CLI-${String((currentPage - 1) * PAGE_SIZE + index + 1).padStart(3, "0")}`;
-                                        return (
-                                            <tr key={client.id} className="border-b border-border last:border-b-0 hover:bg-surface-2 transition-colors">
-                                                <td className="px-3 py-3 text-[11px] font-mono text-text-2">{code}</td>
-                                                <td className="px-3 py-3">
-                                                    <div className="flex flex-col gap-0.5">
-                                                        <span className="font-semibold text-text">{client.name}</span>
-                                                        <span className="text-[10px] font-mono text-text-3">{client.document}</span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-3 text-[11px] font-mono text-text-2">{client.units}</td>
-                                                <td className="px-3 py-3 text-[11px] font-mono text-text-2">{client.systems}</td>
-                                                <td className="px-3 py-3">
-                                                    <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[9px] font-mono uppercase tracking-[0.08em] ${stateBadgeClass(client.visualState)}`}>
-                                                        <span className={`h-1.5 w-1.5 rounded-full ${stateDotClass(client.visualState)}`} />
-                                                        {stateLabel(client.visualState)}
+                    <div className="border-b border-border bg-surface-2 px-3 py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3">Hierarquia</span>
+                            <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Cliente</span>
+                            <span className="text-text-3 text-xs">→</span>
+                            <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Unidade</span>
+                            <span className="text-text-3 text-xs">→</span>
+                            <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Sistema</span>
+                            <span className="text-text-3 text-xs">→</span>
+                            <span className="inline-flex items-center rounded border border-brand/30 bg-brand/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-brand">Componentes</span>
+                        </div>
+                    </div>
+
+                    <div className="p-3 space-y-3">
+                        {loading ? (
+                            <div className="h-16 rounded border border-border bg-surface-2 animate-pulse" />
+                        ) : pagedRows.length === 0 ? (
+                            <div className="py-16 text-center">
+                                <p className="text-text-2 text-sm font-semibold">Nenhum cliente encontrado</p>
+                                <p className="text-text-3 text-xs mt-2">Tente ajustar os filtros ou a busca</p>
+                            </div>
+                        ) : (
+                            pagedRows.map((client, index) => {
+                                const contact = getContactMeta(client.contacts);
+                                const code = `CLI-${String((currentPage - 1) * PAGE_SIZE + index + 1).padStart(3, "0")}`;
+                                const displayName = client.displayName || client.tradeName || client.name;
+
+                                return (
+                                    <article key={client.id} className="rounded border border-border bg-surface-2 overflow-hidden">
+                                        <header className="border-b border-border bg-surface px-3 py-2.5 flex flex-wrap items-center gap-2">
+                                            <span className="rounded border border-border bg-surface-2 px-2 py-1 text-[10px] font-mono text-text-2">{code}</span>
+                                            <strong className="text-sm text-text">{displayName}</strong>
+                                            <span className="text-[10px] font-mono text-text-3">{client.document}</span>
+                                            <span className={`ml-auto inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[9px] font-mono uppercase tracking-[0.08em] ${stateBadgeClass(client.visualState)}`}>
+                                                <span className={`h-1.5 w-1.5 rounded-full ${stateDotClass(client.visualState)}`} />
+                                                {stateLabel(client.visualState)}
+                                            </span>
+                                        </header>
+
+                                        <div className="p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+                                            <div className="lg:col-span-8 space-y-2">
+                                                <p className="text-[10px] font-mono uppercase tracking-[0.07em] text-text-3">Fluxo técnico</p>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[11px] text-text-2">
+                                                        Cliente: {displayName}
                                                     </span>
-                                                </td>
-                                                <td className="px-3 py-3 text-[12px] text-text-2">{client.city} / {client.state}</td>
-                                                <td className="px-3 py-3">
-                                                    <div className="text-[11px] text-text-2 leading-relaxed">
-                                                        <div className="font-mono">{contact.phone}</div>
-                                                        <div className="text-text-3">{contact.email}</div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <div className="flex items-center justify-end gap-1.5">
-                                                        <Link
-                                                            href={`${isWebContext ? "/admin/web/clients" : "/admin/clients"}/${client.id}`}
-                                                            className="h-7 px-2.5 inline-flex items-center rounded border border-border-2 bg-surface-3 text-[11px] text-text-2 hover:border-accent-border hover:text-accent"
-                                                        >
-                                                            Ver
-                                                        </Link>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })
-                                )}
-                            </tbody>
-                        </table>
+                                                    <span className="text-text-3 text-xs">→</span>
+                                                    <span className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[11px] text-text-2">
+                                                        Unidades: {client.units}
+                                                    </span>
+                                                    <span className="text-text-3 text-xs">→</span>
+                                                    <span className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[11px] text-text-2">
+                                                        Sistemas: {client.systems}
+                                                    </span>
+                                                    <span className="text-text-3 text-xs">→</span>
+                                                    <span className="inline-flex items-center rounded border border-brand/30 bg-brand/10 px-2 py-1 text-[11px] text-brand">
+                                                        Componentes: via sistemas
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="lg:col-span-3 text-[11px] text-text-2 leading-relaxed">
+                                                <div className="font-mono">{contact.phone}</div>
+                                                <div className="text-text-3">{contact.email}</div>
+                                                <div className="text-text-3 mt-1">{client.city} / {client.state}</div>
+                                            </div>
+
+                                            <div className="lg:col-span-1 flex justify-end">
+                                                <Link
+                                                    href={`${isWebContext ? "/admin/web/clients" : "/admin/clients"}/${client.id}`}
+                                                    className="h-10 px-3 inline-flex items-center rounded border border-border-2 bg-surface text-[11px] text-text-2 hover:border-accent-border hover:text-accent"
+                                                >
+                                                    Abrir
+                                                </Link>
+                                            </div>
+                                        </div>
+                                    </article>
+                                );
+                            })
+                        )}
                     </div>
 
                     <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-3 flex-wrap">

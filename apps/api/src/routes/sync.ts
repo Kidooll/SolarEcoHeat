@@ -1,5 +1,16 @@
 import { FastifyPluginAsync } from "fastify";
-import { and, attendances, db, eq, inArray, occurrences, systemMaintenances, systems, technicalUnits } from "@solarecoheat/db";
+import {
+  and,
+  attendances,
+  conflictResolutionLog,
+  db,
+  eq,
+  inArray,
+  occurrences,
+  systemMaintenances,
+  systems,
+  technicalUnits,
+} from "@solarecoheat/db";
 import { syncPushSchema } from "@solarecoheat/validators";
 import { getUserRole } from "../lib/auth";
 
@@ -12,6 +23,51 @@ type IncomingSyncOperation = {
   data?: Record<string, unknown>;
   timestamp?: number;
 };
+
+type SyncResult = {
+  localId?: number;
+  status: "success" | "error" | "conflict";
+  code?: string;
+  message?: string;
+  conflictId?: string;
+};
+
+function normalizeSeverity(value: string | null | undefined): "OK" | "ATN" | "CRT" {
+  const normalized = (value || "").toLowerCase();
+  if (normalized.includes("crt") || normalized.includes("crit")) return "CRT";
+  if (normalized.includes("atn") || normalized.includes("aten")) return "ATN";
+  return "OK";
+}
+
+function severityPriority(value: string | null | undefined) {
+  const normalized = normalizeSeverity(value);
+  if (normalized === "CRT") return 3;
+  if (normalized === "ATN") return 2;
+  return 1;
+}
+
+function componentChecklistStatus(value: unknown): "OK" | "ATN" | "CRT" | null {
+  if (!value || typeof value !== "object") return null;
+  const status = (value as any).status;
+  if (status === "OK" || status === "ATN" || status === "CRT") return status;
+  return null;
+}
+
+function deriveSystemFinalState(checklist: Record<string, unknown>) {
+  const statuses = Object.values(checklist)
+    .map((item) => componentChecklistStatus(item))
+    .filter(Boolean) as Array<"OK" | "ATN" | "CRT">;
+  if (statuses.includes("CRT")) return "CRT";
+  if (statuses.includes("ATN")) return "ATN";
+  return "OK";
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
 
 function getClientIdFromUser(user: any) {
   const raw = user?.app_metadata?.client_id ?? user?.user_metadata?.client_id ?? null;
@@ -34,6 +90,21 @@ function toChecklistPatch(data: Record<string, unknown>) {
 }
 
 export const syncRoutes: FastifyPluginAsync = async (fastify) => {
+  async function markClientRetryApplied(attendanceId: string) {
+    await db
+      .update(conflictResolutionLog)
+      .set({
+        resolution: "client_retry_applied",
+      })
+      .where(
+        and(
+          eq(conflictResolutionLog.entity, "attendance"),
+          eq(conflictResolutionLog.entityId, attendanceId),
+          eq(conflictResolutionLog.resolution, "client_retry"),
+        ),
+      );
+  }
+
   const handlePush = async (request: any, reply: any) => {
     const role = getUserRole(request.user);
     if (role !== "technician" && role !== "admin") {
@@ -64,49 +135,92 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
       "Iniciando processamento de sincronização push",
     );
 
-    const results: Array<{ localId?: number; status: "success" | "error"; message?: string }> = [];
+    const results: SyncResult[] = [];
+
+    const pushError = (input: { localId?: number; code: string; message: string }) => {
+      results.push({
+        localId: input.localId,
+        status: "error",
+        code: input.code,
+        message: input.message,
+      });
+    };
+
+    const pushConflict = async (input: {
+      localId?: number;
+      code: string;
+      message: string;
+      entityId?: string;
+      clientVersion?: number | null;
+      serverVersion?: number | null;
+      resolution?: string | null;
+    }) => {
+      let conflictId: string | undefined;
+      if (isUuid(input.entityId)) {
+        const [created] = await db
+          .insert(conflictResolutionLog)
+          .values({
+            entity: "attendance",
+            entityId: input.entityId,
+            clientVersion: input.clientVersion ?? null,
+            serverVersion: input.serverVersion ?? null,
+            resolvedAt: input.resolution ? new Date() : null,
+            resolution: input.resolution ?? null,
+          })
+          .returning({ id: conflictResolutionLog.id });
+        conflictId = created?.id;
+      }
+
+      results.push({
+        localId: input.localId,
+        status: "conflict",
+        code: input.code,
+        message: input.message,
+        conflictId,
+      });
+    };
     for (const operation of operations) {
       const localId = typeof operation.localId === "number" ? operation.localId : undefined;
       if (!operation.type || !operation.entity || !operation.data) {
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "invalid_operation",
           message: "Operação inválida: campos obrigatórios ausentes.",
         });
         continue;
       }
 
       if (!["CREATE", "UPDATE", "DELETE"].includes(operation.type)) {
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "invalid_type",
           message: "Tipo de operação inválido.",
         });
         continue;
       }
 
       if (!["attendance", "occurrence", "system"].includes(operation.entity)) {
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "invalid_entity",
           message: "Entidade de operação inválida.",
         });
         continue;
       }
 
       if (operation.entity !== "attendance") {
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "entity_not_supported",
           message: "Sincronização desta entidade ainda não está habilitada.",
         });
         continue;
       }
 
       if (operation.type !== "UPDATE") {
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "type_not_supported",
           message: "Somente UPDATE de attendance está habilitado na sincronização.",
         });
         continue;
@@ -115,18 +229,18 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         const patch = toChecklistPatch(operation.data);
         if (!patch.attendanceId || !patch.systemId || !patch.componentId) {
-          results.push({
+          pushError({
             localId,
-            status: "error" as const,
+            code: "missing_fields",
             message: "attendanceId, systemId e componentId são obrigatórios.",
           });
           continue;
         }
 
         if (patch.status !== undefined && !isChecklistStatus(patch.status)) {
-          results.push({
+          pushError({
             localId,
-            status: "error" as const,
+            code: "invalid_checklist_status",
             message: "Status do checklist inválido. Use OK, ATN ou CRT.",
           });
           continue;
@@ -138,37 +252,68 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
             unitId: attendances.unitId,
             technicianId: attendances.technicianId,
             status: attendances.status,
+            updatedAt: attendances.updatedAt,
           })
           .from(attendances)
           .where(eq(attendances.id, patch.attendanceId))
           .limit(1);
 
         if (!attendanceRow) {
-          results.push({ localId, status: "error" as const, message: "Atendimento não encontrado." });
+          pushError({
+            localId,
+            code: "attendance_not_found",
+            message: "Atendimento não encontrado.",
+          });
           continue;
         }
 
         if (role === "technician" && attendanceRow.technicianId !== request.user?.id) {
-          results.push({ localId, status: "error" as const, message: "Atendimento não pertence ao técnico autenticado." });
+          await pushConflict({
+            localId,
+            code: "attendance_not_owned",
+            message: "Atendimento não pertence ao técnico autenticado.",
+            entityId: patch.attendanceId,
+            clientVersion: operation.timestamp ? Math.floor(operation.timestamp / 1000) : null,
+            serverVersion: attendanceRow.updatedAt
+              ? Math.floor(new Date(attendanceRow.updatedAt).getTime() / 1000)
+              : null,
+            resolution: "server_wins",
+          });
           continue;
         }
 
         if (attendanceRow.status.toLowerCase() === "finalizado") {
-          results.push({ localId, status: "error" as const, message: "Atendimento já finalizado. Edição bloqueada." });
+          await pushConflict({
+            localId,
+            code: "attendance_finalized",
+            message: "Atendimento já finalizado. Edição bloqueada.",
+            entityId: patch.attendanceId,
+            clientVersion: operation.timestamp ? Math.floor(operation.timestamp / 1000) : null,
+            serverVersion: attendanceRow.updatedAt
+              ? Math.floor(new Date(attendanceRow.updatedAt).getTime() / 1000)
+              : null,
+            resolution: "server_wins",
+          });
           continue;
         }
 
         const [systemRow] = await db
-          .select({ id: systems.id, unitId: systems.unitId })
+          .select({ id: systems.id, unitId: systems.unitId, stateDerived: systems.stateDerived })
           .from(systems)
           .where(eq(systems.id, patch.systemId))
           .limit(1);
 
         if (!systemRow || systemRow.unitId !== attendanceRow.unitId) {
-          results.push({
+          await pushConflict({
             localId,
-            status: "error" as const,
+            code: "system_mismatch",
             message: "Sistema inválido para este atendimento.",
+            entityId: patch.attendanceId,
+            clientVersion: operation.timestamp ? Math.floor(operation.timestamp / 1000) : null,
+            serverVersion: attendanceRow.updatedAt
+              ? Math.floor(new Date(attendanceRow.updatedAt).getTime() / 1000)
+              : null,
+            resolution: "server_wins",
           });
           continue;
         }
@@ -184,10 +329,16 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
           .limit(1);
 
         if (maintenanceRow?.locked) {
-          results.push({
+          await pushConflict({
             localId,
-            status: "error" as const,
+            code: "maintenance_locked",
             message: "Manutenção travada para edição.",
+            entityId: patch.attendanceId,
+            clientVersion: operation.timestamp ? Math.floor(operation.timestamp / 1000) : null,
+            serverVersion: attendanceRow.updatedAt
+              ? Math.floor(new Date(attendanceRow.updatedAt).getTime() / 1000)
+              : null,
+            resolution: "server_wins",
           });
           continue;
         }
@@ -204,13 +355,16 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
         if (patch.photoUrl !== undefined) next.photoUrl = patch.photoUrl;
 
         checklist[patch.componentId] = next;
+        const checklistDerivedState = deriveSystemFinalState(checklist as Record<string, unknown>);
+        const now = new Date();
 
         if (maintenanceRow) {
           await db
             .update(systemMaintenances)
             .set({
               checklist,
-              updatedAt: new Date(),
+              finalState: checklistDerivedState,
+              updatedAt: now,
             })
             .where(eq(systemMaintenances.id, maintenanceRow.id));
         } else {
@@ -218,25 +372,40 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
             attendanceId: patch.attendanceId,
             systemId: patch.systemId,
             checklist,
+            finalState: checklistDerivedState,
           });
         }
 
-        results.push({ localId, status: "success" as const });
+        if (severityPriority(checklistDerivedState) > severityPriority(systemRow.stateDerived)) {
+          await db
+            .update(systems)
+            .set({
+              stateDerived: checklistDerivedState,
+              updatedAt: now,
+            })
+            .where(eq(systems.id, patch.systemId));
+        }
+
+        await markClientRetryApplied(patch.attendanceId);
+        results.push({ localId, status: "success", code: "ok" });
       } catch (error) {
         fastify.log.error({ error, localId }, "Falha ao persistir operação de sincronização");
-        results.push({
+        pushError({
           localId,
-          status: "error" as const,
+          code: "internal_error",
           message: "Falha ao persistir operação no servidor.",
         });
       }
     }
+
+    const conflictsCount = results.filter((item) => item.status === "conflict").length;
 
     return reply.send({
       success: true,
       schemaVersion: CURRENT_SYNC_SCHEMA_VERSION,
       processed: operations.length,
       results,
+      conflictsCount,
       timestamp: Date.now(),
     });
   };
@@ -413,6 +582,42 @@ export const syncRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/push", { preValidation: [fastify.authenticate] }, handlePush);
   fastify.get("/pull", { preValidation: [fastify.authenticate] }, handlePull);
+
+  fastify.get("/conflicts/retry-status", { preValidation: [fastify.authenticate] }, async (request, reply) => {
+    const role = getUserRole(request.user);
+    if (role !== "technician" && role !== "admin") {
+      return reply.code(403).send({ success: false, error: "Acesso negado." });
+    }
+
+    const query = (request.query || {}) as { ids?: string };
+    const ids = (query.ids || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => isUuid(item));
+
+    if (ids.length === 0) {
+      return { success: true, data: [] as Array<{ id: string; resolution: string | null; resolvedAt: string | null; retryAllowed: boolean }> };
+    }
+
+    const rows = await db
+      .select({
+        id: conflictResolutionLog.id,
+        resolution: conflictResolutionLog.resolution,
+        resolvedAt: conflictResolutionLog.resolvedAt,
+      })
+      .from(conflictResolutionLog)
+      .where(inArray(conflictResolutionLog.id, ids));
+
+    return {
+      success: true,
+      data: rows.map((row) => ({
+        id: row.id,
+        resolution: row.resolution || null,
+        resolvedAt: row.resolvedAt ? new Date(row.resolvedAt).toISOString() : null,
+        retryAllowed: row.resolution === "client_retry",
+      })),
+    };
+  });
 
   // Compatibilidade com endpoints antigos
   fastify.post("/up", { preValidation: [fastify.authenticate] }, handlePush);

@@ -102,6 +102,7 @@ export default function NewQuotePage() {
     const [materialsIncluded, setMaterialsIncluded] = useState(false);
     const [executionScope, setExecutionScope] = useState<ExecutionScope | "">("");
     const [occurrenceContext, setOccurrenceContext] = useState<OccurrenceSummary | null>(null);
+    const [isPwaHandoff, setIsPwaHandoff] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isLoadingQuote, setIsLoadingQuote] = useState(false);
     const [error, setError] = useState("");
@@ -139,6 +140,7 @@ export default function NewQuotePage() {
                         `/api/admin/occurrences/${occurrenceIdFromUrl}/summary`,
                     );
                     setOccurrenceContext(occurrenceResponse.data || null);
+                    setIsPwaHandoff(true);
                 } catch (err: any) {
                     setError(err.message || "Falha ao carregar ocorrência vinculada.");
                 }
@@ -176,6 +178,7 @@ export default function NewQuotePage() {
                         const { client, internal } = parseNotesByPrefix(quote.notes);
                         setClientNotes(client);
                         setInternalNotes(internal);
+                        setIsPwaHandoff((quote.notes || "").includes("ORIGEM: PWA_OCORRENCIA_CRITICA"));
 
                         if (quote.issueDate && quote.validUntil) {
                             const start = new Date(quote.issueDate);
@@ -442,6 +445,11 @@ export default function NewQuotePage() {
                     <div className="p-5 space-y-6">
                         {error && <div className="rounded border border-crit/40 bg-crit/10 px-3 py-2 text-sm text-crit">{error}</div>}
                         {isLoadingQuote && <div className="rounded border border-accent-border bg-accent-bg px-3 py-2 text-sm text-accent">Carregando dados do orçamento...</div>}
+                        {isPwaHandoff && (
+                            <div className="rounded border border-accent-border bg-accent-bg px-3 py-2 text-sm text-accent">
+                                Handoff técnico detectado: orçamento iniciado em campo por ocorrência crítica e encaminhado para análise admin.
+                            </div>
+                        )}
 
                         <section className="space-y-4">
                             <div className="flex items-center gap-2 border-b border-border pb-2">

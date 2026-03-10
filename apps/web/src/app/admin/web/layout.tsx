@@ -21,6 +21,7 @@ const NAV_SECTIONS = [
         label: "Cadastros",
         items: [
             { href: "/admin/web/clients", label: "Clientes", icon: "corporate_fare" },
+            { href: "/admin/web/users", label: "Usuários", icon: "manage_accounts" },
             { href: "/admin/web/systems/new", label: "Sistemas", icon: "settings_input_component" },
             { href: "/admin/web/history", label: "Histórico", icon: "history" },
             { href: "/admin/web/reports", label: "Relatórios", icon: "analytics" },

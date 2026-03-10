@@ -10,6 +10,9 @@ type QuoteRow = {
     id: string;
     description: string;
     status: "rascunho" | "enviado" | "aprovado" | "recusado" | string;
+    isPwaHandoff?: boolean;
+    linkedFinanceCount?: number;
+    handoffStage?: "none" | "awaiting_admin" | "approved_financial" | "rejected";
     issueDate: string | null;
     validUntil: string | null;
     grandTotal: string;
@@ -48,6 +51,7 @@ export default function AdminQuotesPage() {
 
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState<"all" | QuoteRow["status"]>("all");
+    const [handoffOnly, setHandoffOnly] = useState(false);
 
     useEffect(() => {
         const load = async () => {
@@ -88,6 +92,7 @@ export default function AdminQuotesPage() {
         const q = normalizeText(search).replace(/^#/, "");
         return quotes.filter((quote) => {
             if (statusFilter !== "all" && quote.status !== statusFilter) return false;
+            if (handoffOnly && !quote.isPwaHandoff) return false;
             if (!q) return true;
 
             const shortId = quote.id.slice(0, 8);
@@ -106,7 +111,17 @@ export default function AdminQuotesPage() {
                 searchTargets.some((target) => target.includes(q))
             );
         });
-    }, [quotes, search, statusFilter]);
+    }, [quotes, search, statusFilter, handoffOnly]);
+
+    const e2e = useMemo(() => {
+        const handoff = quotes.filter((q) => q.isPwaHandoff);
+        return {
+            total: handoff.length,
+            awaiting: handoff.filter((q) => q.handoffStage === "awaiting_admin").length,
+            approvedFinancial: handoff.filter((q) => q.handoffStage === "approved_financial").length,
+            rejected: handoff.filter((q) => q.handoffStage === "rejected").length,
+        };
+    }, [quotes]);
 
     const newQuotePath = isWebContext ? "/admin/web/finance/quote/new" : "/admin/finance/quote/new";
     const detailsBasePath = isWebContext ? "/admin/web/finance/quotes" : "/admin/finance/quotes";
@@ -159,7 +174,35 @@ export default function AdminQuotesPage() {
                                 </button>
                             ))}
                             <div className="flex-1" />
+                            <button
+                                type="button"
+                                onClick={() => setHandoffOnly((prev) => !prev)}
+                                className={`h-7 px-3 rounded border text-[10px] font-mono uppercase tracking-[0.06em] ${
+                                    handoffOnly ? "border-accent-border bg-accent-bg text-accent" : "border-border bg-surface-2 text-text-3"
+                                }`}
+                            >
+                                Handoff técnico
+                            </button>
                             <span className="text-[10px] font-mono text-text-3"><strong className="text-text-2">{filtered.length}</strong> orçamento(s)</span>
+                        </div>
+
+                        <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                            <div className="rounded border border-border bg-surface-2 p-2">
+                                <p className="text-[10px] font-mono uppercase text-text-3">Handoff total</p>
+                                <p className="mt-1 text-lg font-bold">{e2e.total}</p>
+                            </div>
+                            <div className="rounded border border-accent-border bg-accent-bg p-2">
+                                <p className="text-[10px] font-mono uppercase text-accent">Aguardando admin</p>
+                                <p className="mt-1 text-lg font-bold text-accent">{e2e.awaiting}</p>
+                            </div>
+                            <div className="rounded border border-brand/40 bg-brand/10 p-2">
+                                <p className="text-[10px] font-mono uppercase text-brand">Aprovado + financeiro</p>
+                                <p className="mt-1 text-lg font-bold text-brand">{e2e.approvedFinancial}</p>
+                            </div>
+                            <div className="rounded border border-crit/40 bg-crit/10 p-2">
+                                <p className="text-[10px] font-mono uppercase text-crit">Recusado</p>
+                                <p className="mt-1 text-lg font-bold text-crit">{e2e.rejected}</p>
+                            </div>
                         </div>
 
                         <div className="rounded border border-border bg-surface overflow-hidden">
@@ -181,6 +224,11 @@ export default function AdminQuotesPage() {
                                                     <span className={`inline-flex h-7 items-center rounded border px-2 text-[10px] font-mono uppercase tracking-[0.06em] ${statusClass(quote.status)}`}>
                                                         {quote.status}
                                                     </span>
+                                                    {quote.isPwaHandoff && (
+                                                        <span className="inline-flex h-7 items-center rounded border border-accent-border bg-accent-bg px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-accent">
+                                                            handoff
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex items-center justify-between text-[11px] font-mono text-text-3">
                                                     <span>{quote.issueDate ? new Date(quote.issueDate).toLocaleDateString("pt-BR") : "-"}</span>
@@ -234,9 +282,16 @@ export default function AdminQuotesPage() {
                                                         <td className="px-3 py-3 text-[12px] text-text">{quote.clientName || "Sem cliente"}</td>
                                                         <td className="px-3 py-3 text-[12px] text-text-2">{quote.description}</td>
                                                         <td className="px-3 py-3">
-                                                            <span className={`inline-flex h-7 items-center rounded border px-2 text-[10px] font-mono uppercase tracking-[0.06em] ${statusClass(quote.status)}`}>
-                                                                {quote.status}
-                                                            </span>
+                                                            <div className="flex flex-wrap items-center gap-1">
+                                                                <span className={`inline-flex h-7 items-center rounded border px-2 text-[10px] font-mono uppercase tracking-[0.06em] ${statusClass(quote.status)}`}>
+                                                                    {quote.status}
+                                                                </span>
+                                                                {quote.isPwaHandoff && (
+                                                                    <span className="inline-flex h-7 items-center rounded border border-accent-border bg-accent-bg px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-accent">
+                                                                        handoff
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                         </td>
                                                         <td className="px-3 py-3 text-[11px] font-mono text-text-3">
                                                             {quote.issueDate ? new Date(quote.issueDate).toLocaleDateString("pt-BR") : "-"}

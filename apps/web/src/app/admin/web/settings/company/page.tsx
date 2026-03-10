@@ -12,6 +12,8 @@ type CompanySettings = {
   phone: string;
   address: string;
   website: string;
+  recurrenceDailyLimitTech: number;
+  recurrenceDailyLimitAdmin: number;
 };
 
 type QuoteTemplateSettings = {
@@ -36,6 +38,8 @@ const EMPTY_SETTINGS: CompanySettings = {
   phone: "",
   address: "",
   website: "",
+  recurrenceDailyLimitTech: 6,
+  recurrenceDailyLimitAdmin: 10,
 };
 
 const EMPTY_TEMPLATE: QuoteTemplateSettings = {
@@ -87,6 +91,11 @@ export default function CompanySettingsPage() {
             phone: companyResponse.data.phone || "",
             address: companyResponse.data.address || "",
             website: companyResponse.data.website || "",
+            recurrenceDailyLimitTech: Math.max(1, Number(companyResponse.data.recurrenceDailyLimitTech || 6)),
+            recurrenceDailyLimitAdmin: Math.max(
+              Math.max(1, Number(companyResponse.data.recurrenceDailyLimitTech || 6)),
+              Number(companyResponse.data.recurrenceDailyLimitAdmin || 10),
+            ),
           });
         }
 
@@ -115,8 +124,29 @@ export default function CompanySettingsPage() {
     load();
   }, []);
 
-  const setField = (field: keyof CompanySettings, value: string) => {
+  const setField = (
+    field: "legalName" | "tradeName" | "document" | "email" | "phone" | "address" | "website",
+    value: string,
+  ) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const setNumericField = (field: "recurrenceDailyLimitTech" | "recurrenceDailyLimitAdmin", value: string) => {
+    const parsed = Math.max(1, Number(value || 0) || 1);
+    setForm((prev) => {
+      if (field === "recurrenceDailyLimitTech") {
+        const tech = parsed;
+        return {
+          ...prev,
+          recurrenceDailyLimitTech: tech,
+          recurrenceDailyLimitAdmin: Math.max(tech, prev.recurrenceDailyLimitAdmin),
+        };
+      }
+      return {
+        ...prev,
+        recurrenceDailyLimitAdmin: Math.max(prev.recurrenceDailyLimitTech, parsed),
+      };
+    });
   };
 
   const setTemplateField = <K extends keyof QuoteTemplateSettings>(field: K, value: QuoteTemplateSettings[K]) => {
@@ -137,7 +167,14 @@ export default function CompanySettingsPage() {
       await Promise.all([
         apiFetch<{ success: boolean; data: CompanySettings }>("/api/admin/settings/company", {
           method: "PUT",
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            ...form,
+            recurrenceDailyLimitTech: Math.max(1, Number(form.recurrenceDailyLimitTech || 1)),
+            recurrenceDailyLimitAdmin: Math.max(
+              Math.max(1, Number(form.recurrenceDailyLimitTech || 1)),
+              Number(form.recurrenceDailyLimitAdmin || 1),
+            ),
+          }),
         }),
         apiFetch<{ success: boolean; data: QuoteTemplateSettings }>("/api/admin/settings/quote-template", {
           method: "PUT",
@@ -273,6 +310,39 @@ export default function CompanySettingsPage() {
                       </label>
                     ))}
                   </div>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <div className="flex items-center gap-2 border-b border-border pb-2">
+                  <h2 className="text-[10px] font-mono uppercase tracking-[0.1em] text-text-3">Recorrência de atendimentos</h2>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+
+                <div className="grid grid-cols-12 gap-3">
+                  <label className="col-span-12 md:col-span-6 flex flex-col gap-1.5">
+                    <span className="text-[10px] font-mono uppercase tracking-[0.07em] text-text-3">Limite diário técnico</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.recurrenceDailyLimitTech}
+                      onChange={(e) => setNumericField("recurrenceDailyLimitTech", e.target.value)}
+                      className={fieldClassName()}
+                    />
+                  </label>
+                  <label className="col-span-12 md:col-span-6 flex flex-col gap-1.5">
+                    <span className="text-[10px] font-mono uppercase tracking-[0.07em] text-text-3">Limite diário admin</span>
+                    <input
+                      type="number"
+                      min={form.recurrenceDailyLimitTech}
+                      value={form.recurrenceDailyLimitAdmin}
+                      onChange={(e) => setNumericField("recurrenceDailyLimitAdmin", e.target.value)}
+                      className={fieldClassName()}
+                    />
+                  </label>
+                  <p className="col-span-12 text-xs text-text-3">
+                    Aplicado na prévia/publicação da recorrência. Itens acima do limite diário são bloqueados como conflito.
+                  </p>
                 </div>
               </section>
             </div>

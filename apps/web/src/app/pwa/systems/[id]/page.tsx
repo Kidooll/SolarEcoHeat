@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { ComponentCard } from "@/components/ui/component-card";
 import { apiFetch } from "@/lib/api";
+import { getSystemTypeIcon, getSystemTypeLabel } from "@/lib/system-type";
 
 export default function SystemDetailPage() {
     const params = useParams();
@@ -14,14 +15,6 @@ export default function SystemDetailPage() {
     const [system, setSystem] = useState<any>(null);
     const [components, setComponents] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
-
-    const getIconForType = (type: string) => {
-        const t = (type || "").toLowerCase();
-        if (t.includes("solar")) return "solar_power";
-        if (t.includes("bomba") || t.includes("hidro") || t.includes("piscina")) return "water_drop";
-        if (t.includes("gás") || t.includes("gas")) return "mode_fan";
-        return "settings_input_component";
-    };
 
     const getPlaceholderImage = (type: string) => {
         const t = (type || "").toLowerCase();
@@ -120,7 +113,7 @@ export default function SystemDetailPage() {
                     </button>
                     <div className="flex items-center gap-2 min-w-0">
                         <span className="font-mono text-xs text-primary bg-primary/10 px-2 py-1 rounded border border-primary/20 uppercase inline-flex items-center max-w-full truncate">
-                            <span className="material-symbols-outlined text-sm align-middle mr-1">{getIconForType(system.type)}</span>
+                            <span className="material-symbols-outlined text-sm align-middle mr-1">{getSystemTypeIcon(system.type)}</span>
                             {system.name}
                         </span>
                     </div>
@@ -142,7 +135,7 @@ export default function SystemDetailPage() {
                             <div className="flex items-start justify-between">
                                 <div>
                                     <h2 className="text-lg font-bold text-white mb-1">{system.name}</h2>
-                                    <p className="text-slate-400 text-sm">{system.type}</p>
+                                    <p className="text-slate-400 text-sm">{getSystemTypeLabel(system.type)}</p>
                                 </div>
                                 <span className={`h-3 w-3 rounded-full ${system.state_derived === "OK" ? "bg-status-ok shadow-[0_0_8px_rgba(16,185,129,0.5)]" :
                                         system.state_derived === "ATN" ? "bg-status-warn shadow-[0_0_8px_rgba(245,158,11,0.5)]" :
@@ -157,7 +150,7 @@ export default function SystemDetailPage() {
                                 </div>
                                 <div>
                                     <p className="text-[10px] uppercase tracking-wider text-slate-500 font-mono mb-0.5">Tipo</p>
-                                    <p className="text-sm font-medium text-slate-200 font-mono">{system.type}</p>
+                                    <p className="text-sm font-medium text-slate-200 font-mono">{getSystemTypeLabel(system.type)}</p>
                                 </div>
                                 <div>
                                     <p className="text-[10px] uppercase tracking-wider text-slate-500 font-mono mb-0.5">Status</p>

@@ -4,15 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { apiFetch } from "@/lib/api";
+import { getSystemTypeLabel, SYSTEM_TYPE_OPTIONS } from "@/lib/system-type";
 
 const HEAT_SOURCES = ["Bombas de Calor", "Resistências", "Caldeira Gás", "Aquecedor a Gás", "Solar Térmico"];
-const SYSTEM_TYPES = [
-    { value: "solar", label: "Solar" },
-    { value: "gas", label: "Gás" },
-    { value: "eletrico", label: "Elétrico" },
-    { value: "piscina", label: "Piscina" },
-    { value: "sauna", label: "Sauna" },
-];
 
 type TabId = "dados" | "componentes";
 
@@ -91,16 +85,50 @@ export default function NewSystemPage() {
             if (!search) return true;
             return (
                 (system.name || "").toLowerCase().includes(search) ||
-                (system.type || "").toLowerCase().includes(search)
+                (system.type || "").toLowerCase().includes(search) ||
+                getSystemTypeLabel(system.type).toLowerCase().includes(search)
             );
         });
     }, [systemsList, systemsSearch, unitId]);
 
-    const getUnitLabelById = (targetUnitId: string) => {
-        const unit = units.find((u) => u.id === targetUnitId);
-        if (!unit) return "Unidade não encontrada";
-        return `${(unit.clients as any)?.name || "Cliente"} → ${unit.name}`;
-    };
+    const groupedSystems = useMemo(() => {
+        const groups = new Map<
+            string,
+            {
+                clientName: string;
+                unitName: string;
+                systems: any[];
+            }
+        >();
+
+        for (const system of filteredSystems) {
+            const clientName = system.clientName || "Cliente não identificado";
+            const unitName =
+                system.unitName ||
+                units.find((unit) => unit.id === system.unit_id)?.name ||
+                "Unidade não identificada";
+            const groupKey = `${clientName}::${unitName}`;
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, {
+                    clientName,
+                    unitName,
+                    systems: [],
+                });
+            }
+            groups.get(groupKey)!.systems.push(system);
+        }
+
+        return Array.from(groups.values())
+            .map((group) => ({
+                ...group,
+                systems: [...group.systems].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR")),
+            }))
+            .sort((a, b) => {
+                const byClient = a.clientName.localeCompare(b.clientName, "pt-BR");
+                if (byClient !== 0) return byClient;
+                return a.unitName.localeCompare(b.unitName, "pt-BR");
+            });
+    }, [filteredSystems, units]);
 
     const handleDeleteSystem = async (systemId: string) => {
         const componentsCount = componentsBySystem[systemId] || 0;
@@ -284,7 +312,7 @@ export default function NewSystemPage() {
                                             <span className="text-[10px] font-mono uppercase tracking-[0.07em] text-text-3">Tipo de Sistema *</span>
                                             <select required value={type} onChange={(e) => setType(e.target.value)} className={fieldClassName()}>
                                                 <option value="">Selecione</option>
-                                                {SYSTEM_TYPES.map((t) => (
+                                                {SYSTEM_TYPE_OPTIONS.map((t) => (
                                                     <option key={t.value} value={t.value}>
                                                         {t.label}
                                                     </option>
@@ -358,43 +386,68 @@ export default function NewSystemPage() {
                                             Nenhum sistema encontrado para os filtros atuais.
                                         </div>
                                     ) : (
-                                        <div className="space-y-2">
-                                            {filteredSystems.slice(0, 12).map((system) => (
-                                                <div key={system.id} className="rounded border border-border bg-surface px-3 py-2 flex items-center justify-between gap-3">
-                                                    <div className="min-w-0">
-                                                        <p className="text-sm font-semibold text-text truncate">{system.name}</p>
-                                                        <p className="text-[11px] text-text-3 mt-1 truncate">
-                                                            {getUnitLabelById(system.unit_id)} · Tipo: {system.type || "-"}
-                                                        </p>
-                                                        <p className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3 mt-1">
-                                                            Componentes: {componentsBySystem[system.id] || 0}
-                                                        </p>
+                                        <div className="space-y-3">
+                                            <div className="rounded border border-border bg-surface px-3 py-2 flex flex-wrap items-center gap-2">
+                                                <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3">Hierarquia</span>
+                                                <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Cliente</span>
+                                                <span className="text-text-3 text-xs">→</span>
+                                                <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Unidade</span>
+                                                <span className="text-text-3 text-xs">→</span>
+                                                <span className="inline-flex items-center rounded border border-brand/30 bg-brand/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-brand">Sistema</span>
+                                                <span className="text-text-3 text-xs">→</span>
+                                                <span className="inline-flex items-center rounded border border-border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">Componentes</span>
+                                            </div>
+
+                                            {groupedSystems.map((group) => (
+                                                <article key={`${group.clientName}-${group.unitName}`} className="rounded border border-border bg-surface overflow-hidden">
+                                                    <header className="px-3 py-2.5 border-b border-border bg-surface-2 flex flex-wrap items-center gap-2">
+                                                        <span className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">
+                                                            {group.clientName}
+                                                        </span>
+                                                        <span className="text-text-3 text-xs">→</span>
+                                                        <span className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[10px] font-mono uppercase tracking-[0.06em] text-text-2">
+                                                            {group.unitName}
+                                                        </span>
+                                                        <span className="ml-auto text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                                            {group.systems.length} sistema(s)
+                                                        </span>
+                                                    </header>
+
+                                                    <div className="p-2 space-y-2">
+                                                        {group.systems.map((system) => (
+                                                            <div key={system.id} className="rounded border border-border bg-surface-2 px-3 py-2.5 flex flex-wrap items-center justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <p className="text-sm font-semibold text-text truncate">{system.name}</p>
+                                                                    <p className="text-[11px] text-text-3 mt-1">
+                                                                        Tipo: {getSystemTypeLabel(system.type)}
+                                                                    </p>
+                                                                    <p className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3 mt-1">
+                                                                        Componentes: {componentsBySystem[system.id] || 0}
+                                                                    </p>
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => router.push(isWebContext ? `/admin/web/systems/${system.id}` : `/admin/systems/${system.id}`)}
+                                                                        className="h-10 px-3 rounded border border-border-2 text-[11px] text-text-2 hover:bg-surface-3"
+                                                                    >
+                                                                        Abrir
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleDeleteSystem(system.id)}
+                                                                        disabled={removingSystemId === system.id || (componentsBySystem[system.id] || 0) > 0}
+                                                                        className="h-10 px-3 rounded border border-crit/40 text-[11px] text-crit hover:bg-crit/10 disabled:opacity-60"
+                                                                        title={(componentsBySystem[system.id] || 0) > 0 ? "Remova os componentes vinculados antes de excluir o sistema" : "Remover sistema"}
+                                                                    >
+                                                                        {removingSystemId === system.id ? "..." : "Remover"}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
                                                     </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => router.push(isWebContext ? `/admin/web/systems/${system.id}` : `/admin/systems/${system.id}`)}
-                                                            className="h-8 px-3 rounded border border-border-2 text-[11px] text-text-2 hover:bg-surface-3"
-                                                        >
-                                                            Abrir
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleDeleteSystem(system.id)}
-                                                            disabled={removingSystemId === system.id || (componentsBySystem[system.id] || 0) > 0}
-                                                            className="h-8 px-3 rounded border border-crit/40 text-[11px] text-crit hover:bg-crit/10 disabled:opacity-60"
-                                                            title={(componentsBySystem[system.id] || 0) > 0 ? "Remova os componentes vinculados antes de excluir o sistema" : "Remover sistema"}
-                                                        >
-                                                            {removingSystemId === system.id ? "..." : "Remover"}
-                                                        </button>
-                                                    </div>
-                                                </div>
+                                                </article>
                                             ))}
-                                            {filteredSystems.length > 12 && (
-                                                <p className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
-                                                    Exibindo 12 de {filteredSystems.length} sistemas
-                                                </p>
-                                            )}
                                         </div>
                                     )}
                                 </div>

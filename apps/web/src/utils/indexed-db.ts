@@ -24,6 +24,9 @@ export interface FailedSyncOperation {
     failedAt: number;
     reason: string;
     attempts: number;
+    status?: "error" | "conflict";
+    code?: string | null;
+    conflictId?: string | null;
 }
 
 export async function initDB() {
@@ -89,7 +92,11 @@ export async function updateSyncOperation(id: number, patch: Partial<SyncOperati
     await tx.done;
 }
 
-export async function moveToFailedOperations(operation: SyncOperation, reason: string) {
+export async function moveToFailedOperations(
+    operation: SyncOperation,
+    reason: string,
+    meta?: { status?: "error" | "conflict"; code?: string | null; conflictId?: string | null },
+) {
     const db = await initDB();
     const tx = db.transaction(["sync_queue", "failed_ops"], "readwrite");
     const syncStore = tx.objectStore("sync_queue");
@@ -104,6 +111,9 @@ export async function moveToFailedOperations(operation: SyncOperation, reason: s
         failedAt: Date.now(),
         reason,
         attempts: operation.attempts ?? 0,
+        status: meta?.status || "error",
+        code: meta?.code || null,
+        conflictId: meta?.conflictId || null,
     } satisfies FailedSyncOperation);
 
     if (operation.id) {

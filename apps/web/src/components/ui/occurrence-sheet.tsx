@@ -178,7 +178,7 @@ export function OccurrenceSheet({ isOpen, onClose, systemName, attendanceId, sys
                                 <div className="flex flex-col">
                                     <span className="text-sm text-text">Gerar orçamento?</span>
                                     <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
-                                        Cria rascunho para handoff ao admin
+                                        Encaminha orçamento para análise do admin
                                     </span>
                                 </div>
                                 <input

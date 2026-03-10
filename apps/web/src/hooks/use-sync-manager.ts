@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "@/lib/api";
 import {
     getPendingOperations,
     removePendingOperation,
@@ -10,6 +11,13 @@ import {
     SyncOperation,
 } from "@/utils/indexed-db";
 import { pushPendingData } from "@/utils/sync-engine";
+
+function isConflictRetryAllowed(code?: string | null) {
+    const normalized = (code || "").trim().toLowerCase();
+    // Conflito potencialmente transitório: manutenção pode ser destravada e aceitar novo envio.
+    if (normalized === "maintenance_locked") return true;
+    return false;
+}
 
 export function useSyncManager() {
     const [pendingOps, setPendingOps] = useState<SyncOperation[]>([]);
@@ -22,6 +30,29 @@ export function useSyncManager() {
         const ops = await getPendingOperations();
         setPendingOps(ops.filter(op => !op.synced));
         const failed = await getFailedOperations();
+        const conflictIds = Array.from(
+            new Set(
+                failed
+                    .filter((op) => op.status === "conflict" && op.conflictId)
+                    .map((op) => op.conflictId as string),
+            ),
+        );
+
+        let serverRetryMap = new Map<string, boolean>();
+        if (conflictIds.length > 0) {
+            try {
+                const response = await apiFetch<{
+                    success: boolean;
+                    data: Array<{ id: string; retryAllowed: boolean }>;
+                }>(`/api/sync/conflicts/retry-status?ids=${encodeURIComponent(conflictIds.join(","))}`, {
+                    method: "GET",
+                });
+                serverRetryMap = new Map((response.data || []).map((item) => [item.id, !!item.retryAllowed]));
+            } catch {
+                serverRetryMap = new Map();
+            }
+        }
+
         setErrors(
             failed.map((op) => ({
                 id: op.id,
@@ -30,6 +61,13 @@ export function useSyncManager() {
                 error: op.reason,
                 time: new Date(op.failedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
                 attempts: op.attempts,
+                status: op.status || "error",
+                code: op.code || null,
+                conflictId: op.conflictId || null,
+                retryAllowed:
+                    op.status === "conflict"
+                        ? Boolean((op.conflictId && serverRetryMap.get(op.conflictId)) || isConflictRetryAllowed(op.code || null))
+                        : true,
             })),
         );
     }, []);
@@ -84,6 +122,10 @@ export function useSyncManager() {
     };
 
     const retryOperation = async (id: number) => {
+        const target = errors.find((item) => item.id === id);
+        if (target?.status === "conflict" && !target?.retryAllowed) {
+            return;
+        }
         await retryFailedOperation(id);
         await triggerSync();
     };

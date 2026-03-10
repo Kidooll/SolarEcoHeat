@@ -23,6 +23,15 @@ type AttendanceRow = {
 
 type UnitOption = { id: string; name: string; clientName: string | null };
 type TechnicianOption = { id: string; full_name: string | null; email: string | null };
+type ContractOption = {
+  id: string;
+  clientId: string;
+  name: string;
+  frequency: string;
+  amount: number;
+  status: string;
+  clientLabel: string;
+};
 type RecurrencePreviewItem = {
   contractId: string;
   contractName: string;
@@ -32,6 +41,9 @@ type RecurrencePreviewItem = {
   unitId: string;
   unitName: string;
   scheduledFor: string;
+  technicianId: string;
+  technicianName: string;
+  preferredSource: "contract" | "unit" | "fallback";
   status: "ready" | "duplicate" | "conflict";
   reason: string | null;
 };
@@ -87,6 +99,7 @@ export default function AdminAttendancesPage() {
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [units, setUnits] = useState<UnitOption[]>([]);
   const [techs, setTechs] = useState<TechnicianOption[]>([]);
+  const [contracts, setContracts] = useState<ContractOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -106,6 +119,7 @@ export default function AdminAttendancesPage() {
   const [notice, setNotice] = useState("");
   const [recurrenceMonth, setRecurrenceMonth] = useState(new Date().toISOString().slice(0, 7));
   const [recurrenceTechnicianId, setRecurrenceTechnicianId] = useState("");
+  const [recurrenceContractId, setRecurrenceContractId] = useState("");
   const [recurrenceLoading, setRecurrenceLoading] = useState(false);
   const [recurrencePublishing, setRecurrencePublishing] = useState(false);
   const [recurrencePreview, setRecurrencePreview] = useState<{
@@ -123,14 +137,16 @@ export default function AdminAttendancesPage() {
     setLoading(true);
     setError("");
     try {
-      const [attendanceResponse, unitsResponse, techniciansResponse] = await Promise.all([
+      const [attendanceResponse, unitsResponse, techniciansResponse, financeOptionsResponse] = await Promise.all([
         apiFetch<{ success: boolean; data: AttendanceRow[] }>("/api/admin/attendances"),
         apiFetch<{ success: boolean; data: UnitOption[] }>("/api/admin/units/options"),
         apiFetch<{ success: boolean; data: TechnicianOption[] }>("/api/admin/technicians"),
+        apiFetch<{ success: boolean; data?: { contracts?: ContractOption[] } }>("/api/finance/options"),
       ]);
       setRows(attendanceResponse.data || []);
       setUnits(unitsResponse.data || []);
       setTechs(techniciansResponse.data || []);
+      setContracts((financeOptionsResponse.data?.contracts || []).filter((contract) => contract.status === "active"));
     } catch (err: any) {
       setError(err.message || "Erro ao carregar atendimentos.");
     } finally {
@@ -348,6 +364,13 @@ export default function AdminAttendancesPage() {
     setError("");
     setNotice("");
     try {
+      const params = new URLSearchParams({
+        month: recurrenceMonth,
+        technicianId: recurrenceTechnicianId,
+      });
+      if (recurrenceContractId) {
+        params.set("contractId", recurrenceContractId);
+      }
       const response = await apiFetch<{
         success: boolean;
         data: {
@@ -355,13 +378,17 @@ export default function AdminAttendancesPage() {
           summary: { total: number; ready: number; duplicate: number; conflict: number };
           items: RecurrencePreviewItem[];
         };
-      }>(`/api/admin/attendances/recurrence/preview?month=${recurrenceMonth}&technicianId=${recurrenceTechnicianId}`);
+      }>(`/api/admin/attendances/recurrence/preview?${params.toString()}`);
 
       setRecurrencePreview({
         summary: response.data.summary,
         items: response.data.items || [],
       });
-      setNotice(`Prévia de recorrência carregada para ${response.data.month}.`);
+      setNotice(
+        recurrenceContractId
+          ? `Prévia de recorrência carregada para ${response.data.month} (contrato específico).`
+          : `Prévia de recorrência carregada para ${response.data.month}.`,
+      );
     } catch (err: any) {
       setError(err.message || "Falha ao gerar pré-visualização de recorrência.");
     } finally {
@@ -397,6 +424,7 @@ export default function AdminAttendancesPage() {
         body: JSON.stringify({
           month: recurrenceMonth,
           technicianId: recurrenceTechnicianId,
+          contractId: recurrenceContractId || undefined,
           onlyReady: true,
         }),
       });
@@ -507,7 +535,7 @@ export default function AdminAttendancesPage() {
                 <div>
                   <h2 className="text-[10px] font-mono uppercase tracking-[0.1em] text-text-3">Recorrência por Contrato</h2>
                   <p className="text-xs text-text-2 mt-1">
-                    Pré-visualize e publique atendimentos recorrentes mensais do contrato para o técnico selecionado.
+                    Pré-visualize e publique recorrências com técnico preferencial por contrato/unidade e fallback no técnico selecionado.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -540,7 +568,7 @@ export default function AdminAttendancesPage() {
                     className="h-10 rounded border border-border bg-surface-2 px-3 text-sm"
                   />
                 </label>
-                <label className="flex flex-col gap-1 md:col-span-2">
+                <label className="flex flex-col gap-1">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-text-3">Técnico responsável</span>
                   <select
                     value={recurrenceTechnicianId}
@@ -551,6 +579,21 @@ export default function AdminAttendancesPage() {
                     {techs.map((tech) => (
                       <option key={tech.id} value={tech.id}>
                         {tech.full_name || tech.email || "Técnico"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-text-3">Contrato</span>
+                  <select
+                    value={recurrenceContractId}
+                    onChange={(event) => setRecurrenceContractId(event.target.value)}
+                    className="h-10 rounded border border-border bg-surface-2 px-3 text-sm"
+                  >
+                    <option value="">Todos os contratos ativos</option>
+                    {contracts.map((contract) => (
+                      <option key={contract.id} value={contract.id}>
+                        {contract.name} · {contract.clientLabel}
                       </option>
                     ))}
                   </select>
@@ -584,6 +627,7 @@ export default function AdminAttendancesPage() {
                         <tr className="text-[10px] font-mono uppercase tracking-widest text-text-3">
                           <th className="p-2 text-left">Cliente / Unidade</th>
                           <th className="p-2 text-left">Contrato</th>
+                          <th className="p-2 text-left">Técnico</th>
                           <th className="p-2 text-left">Data</th>
                           <th className="p-2 text-left">Status</th>
                         </tr>
@@ -591,7 +635,7 @@ export default function AdminAttendancesPage() {
                       <tbody>
                         {recurrencePreview.items.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="p-3 text-text-3">
+                            <td colSpan={5} className="p-3 text-text-3">
                               Sem itens para a competência selecionada.
                             </td>
                           </tr>
@@ -605,6 +649,16 @@ export default function AdminAttendancesPage() {
                               <td className="p-2">
                                 <p className="font-medium">{item.contractName}</p>
                                 <p className="text-text-3">{item.frequency}</p>
+                              </td>
+                              <td className="p-2">
+                                <p className="font-medium">{item.technicianName}</p>
+                                <p className="text-text-3">
+                                  {item.preferredSource === "contract"
+                                    ? "Preferência do contrato"
+                                    : item.preferredSource === "unit"
+                                      ? "Preferência da unidade"
+                                      : "Técnico selecionado"}
+                                </p>
                               </td>
                               <td className="p-2 font-mono">
                                 {new Date(item.scheduledFor).toLocaleString("pt-BR")}

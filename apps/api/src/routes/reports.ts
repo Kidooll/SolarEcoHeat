@@ -17,6 +17,30 @@ interface ReportJobRow {
   error: string | null;
 }
 
+function getClientIdFromUser(user: any) {
+  const raw = user?.app_metadata?.client_id ?? user?.user_metadata?.client_id ?? null;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+}
+
+async function getClientIdWithProfileFallback(user: any) {
+  const claimed = getClientIdFromUser(user);
+  if (claimed) return claimed;
+  const userId = user?.id;
+  if (!userId) return null;
+  try {
+    const result = (await db.execute(sql`
+      select client_id
+      from profiles
+      where id = ${userId}::uuid
+      limit 1
+    `)) as unknown as Array<{ client_id: string | null }>;
+    const row = Array.isArray((result as any).rows) ? (result as any).rows?.[0] : (result as any)?.[0];
+    return row?.client_id || null;
+  } catch {
+    return null;
+  }
+}
+
 function makePdfBuffer(job: { id: string; type: string }): Buffer {
   const content = [
     "%PDF-1.1",
@@ -94,9 +118,21 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/:type", async (request, reply) => {
     const { type } = request.params as { type: ReportType };
     const accepted: ReportType[] = ["attendance", "system", "period", "client"];
+    const role = getUserRole(request.user);
 
     if (!accepted.includes(type)) {
       return reply.status(400).send({ error: "Tipo de relatório inválido" });
+    }
+    if (role === "client" && type !== "client") {
+      return reply.status(403).send({ error: "Perfil cliente pode gerar apenas relatório do cliente." });
+    }
+    if (role === "client") {
+      const clientId = await getClientIdWithProfileFallback(request.user);
+      if (!clientId) {
+        return reply
+          .status(403)
+          .send({ error: "Perfil cliente sem vínculo de client_id. Atualize o perfil para liberar relatórios." });
+      }
     }
 
     const jobId = randomUUID();

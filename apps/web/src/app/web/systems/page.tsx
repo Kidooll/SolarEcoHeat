@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { serverApiFetch } from "@/lib/server-api";
+import { getSystemTypeLabel } from "@/lib/system-type";
 
 type MeResponse = {
   success: boolean;
@@ -52,7 +53,7 @@ export default async function WebSystemsPage() {
               <h2 className="text-base font-semibold leading-tight">{system.name}</h2>
               <span className="text-[10px] font-mono uppercase text-text-3">{system.state_derived}</span>
             </div>
-            <p className="mt-1 text-xs text-text-3 font-mono uppercase">{system.type}</p>
+            <p className="mt-1 text-xs text-text-3 font-mono uppercase">{getSystemTypeLabel(system.type)}</p>
             <p className="mt-3 text-xs text-text-2">{system.unit_name}</p>
           </Link>
         ))}

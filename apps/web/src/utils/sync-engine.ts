@@ -3,6 +3,8 @@ import {
     getPendingOperations,
     markAsSynced,
     moveToFailedOperations,
+    getFailedOperations,
+    retryFailedOperation,
     updateSyncOperation,
     initDB,
 } from "./indexed-db";
@@ -12,12 +14,48 @@ const SYNC_SCHEMA_VERSION = 1;
 
 type SyncPushResult = {
     localId?: number;
-    status: "success" | "error";
+    status: "success" | "error" | "conflict";
+    code?: string;
     message?: string;
+    conflictId?: string;
 };
+
+async function promoteApprovedConflictRetries() {
+    const failed = await getFailedOperations();
+    const conflicted = failed.filter((item) => item.status === "conflict" && item.conflictId);
+    if (conflicted.length === 0) return;
+
+    const conflictIds = Array.from(new Set(conflicted.map((item) => item.conflictId).filter(Boolean))) as string[];
+    if (conflictIds.length === 0) return;
+
+    const response = await apiFetch<{
+        success: boolean;
+        data: Array<{
+            id: string;
+            resolution: string | null;
+            resolvedAt: string | null;
+            retryAllowed: boolean;
+        }>;
+    }>(`/api/sync/conflicts/retry-status?ids=${encodeURIComponent(conflictIds.join(","))}`, { method: "GET" });
+
+    const retryMap = new Map<string, boolean>(
+        (response.data || []).map((item) => [item.id, !!item.retryAllowed]),
+    );
+
+    for (const op of conflicted) {
+        if (!op.id || !op.conflictId) continue;
+        if (!retryMap.get(op.conflictId)) continue;
+        await retryFailedOperation(op.id);
+    }
+}
 
 export async function pushPendingData() {
     if (!navigator.onLine) return;
+    try {
+        await promoteApprovedConflictRetries();
+    } catch (error) {
+        console.error("[SyncEngine] Falha ao promover conflitos aprovados para retry:", error);
+    }
 
     const pending = await getPendingOperations();
     if (pending.length === 0) return;
@@ -38,6 +76,7 @@ export async function pushPendingData() {
             schemaVersion: number;
             processed: number;
             results: SyncPushResult[];
+            conflictsCount?: number;
         }>("/api/sync/push", {
             method: "POST",
             body: JSON.stringify({
@@ -67,6 +106,19 @@ export async function pushPendingData() {
 
             const attempts = (operation.attempts ?? 0) + 1;
             const reason = result.message || "Falha ao sincronizar operação";
+
+            if (result.status === "conflict") {
+                await moveToFailedOperations(
+                    { ...operation, attempts, lastError: reason },
+                    reason,
+                    {
+                        status: "conflict",
+                        code: result.code || null,
+                        conflictId: result.conflictId || null,
+                    },
+                );
+                continue;
+            }
 
             if (attempts >= MAX_RETRY_ATTEMPTS) {
                 await moveToFailedOperations({ ...operation, attempts, lastError: reason }, reason);

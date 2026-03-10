@@ -10,6 +10,7 @@ type FinanceTab = "receber" | "pagar" | "fluxo" | "extrato" | "contratos";
 type StatusFilter = "all" | "pending" | "overdue" | "paid";
 type OriginFilter = "all" | "orcamento" | "contrato" | "manual";
 type ContractStatusFilter = "all" | "active" | "cancelled";
+type PeriodScope = "month" | "all";
 type TxType = "income" | "expense";
 type TxStatus = "pending" | "paid" | "cancelled";
 type RecurrenceFrequency = "weekly" | "monthly" | "quarterly" | "yearly";
@@ -216,8 +217,29 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value || 0);
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateOnly(value: string) {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const parsed = new Date(year, month, day, 12, 0, 0, 0);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
 function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("pt-BR");
+  const dateOnly = parseDateOnly(value);
+  const parsed = dateOnly || new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("pt-BR");
 }
 
 function monthKey(date: Date) {
@@ -249,7 +271,7 @@ function statusLabel(status: FinanceTransaction["derivedStatus"] | StatementRow[
 }
 
 function makeDefaultForm(type: TxType): FinanceFormState {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toDateInputValue(new Date());
   return {
     type,
     description: "",
@@ -278,7 +300,7 @@ function makeDefaultContractForm(): ContractFormState {
     name: "",
     frequency: "monthly",
     amount: "",
-    startDate: new Date().toISOString().slice(0, 10),
+    startDate: toDateInputValue(new Date()),
     notes: "",
   };
 }
@@ -289,6 +311,7 @@ export default function AdminFinancePage() {
 
   const [activeTab, setActiveTab] = useState<FinanceTab>("receber");
   const [monthCursor, setMonthCursor] = useState(new Date());
+  const [periodScope, setPeriodScope] = useState<PeriodScope>("month");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
   const [contractStatusFilter, setContractStatusFilter] = useState<ContractStatusFilter>("all");
@@ -443,10 +466,10 @@ export default function AdminFinancePage() {
       const params = new URLSearchParams({
         type: tabType,
         status: statusFilter,
-        month,
         page: String(page),
         pageSize: String(pageSize),
       });
+      if (periodScope === "month") params.set("month", month);
       if (searchTerm) params.set("search", searchTerm);
       if (activeTab === "receber") params.set("origin", originFilter);
 
@@ -460,7 +483,7 @@ export default function AdminFinancePage() {
     } finally {
       setLoadingTab(false);
     }
-  }, [activeTab, isListTab, month, originFilter, page, pageSize, searchTerm, statusFilter, tabType]);
+  }, [activeTab, isListTab, month, originFilter, page, pageSize, periodScope, searchTerm, statusFilter, tabType]);
 
   const loadStatement = useCallback(async () => {
     if (activeTab !== "extrato") return;
@@ -523,6 +546,14 @@ export default function AdminFinancePage() {
     if (activeTab === "fluxo") loadCashflow();
     if (activeTab === "contratos") loadContracts();
   }, [activeTab, isListTab, loadCashflow, loadContracts, loadStatement, loadTransactions]);
+
+  useEffect(() => {
+    if (activeTab === "pagar") {
+      setPeriodScope("all");
+    } else if (activeTab === "receber") {
+      setPeriodScope("month");
+    }
+  }, [activeTab]);
 
   const shiftMonth = (delta: number) => {
     setMonthCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
@@ -951,7 +982,41 @@ export default function AdminFinancePage() {
         {(activeTab === "receber" || activeTab === "pagar") && (
           <div className="p-4 border-b border-border space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center rounded border border-border overflow-hidden">
+              <div className="flex items-center gap-1 rounded border border-border bg-surface-2 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodScope("month");
+                    setPage(1);
+                  }}
+                  className={`h-9 px-3 rounded text-[10px] font-mono uppercase tracking-[0.08em] ${
+                    periodScope === "month"
+                      ? "bg-brand-bg border border-brand-border text-brand"
+                      : "text-text-3 hover:text-text-2"
+                  }`}
+                >
+                  Mês
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodScope("all");
+                    setPage(1);
+                  }}
+                  className={`h-9 px-3 rounded text-[10px] font-mono uppercase tracking-[0.08em] ${
+                    periodScope === "all"
+                      ? "bg-brand-bg border border-brand-border text-brand"
+                      : "text-text-3 hover:text-text-2"
+                  }`}
+                >
+                  Todos os meses
+                </button>
+              </div>
+              <div
+                className={`flex items-center rounded border border-border overflow-hidden ${
+                  periodScope === "all" ? "opacity-50 pointer-events-none" : ""
+                }`}
+              >
                 <button type="button" onClick={() => shiftMonth(-1)} className="h-9 w-9 hover:bg-surface-2">
                   ‹
                 </button>
@@ -1015,10 +1080,19 @@ export default function AdminFinancePage() {
                     setPage(1);
                   }}
                   className="h-9 w-full rounded border border-border bg-surface-2 px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 focus:border-accent"
-                  placeholder={activeTab === "receber" ? "Buscar cliente ou descrição..." : "Buscar fornecedor ou descrição..."}
+                  placeholder={
+                    activeTab === "receber"
+                      ? "Buscar cliente ou descrição..."
+                      : "Buscar fornecedor, descrição ou parcela..."
+                  }
                 />
               </div>
             </div>
+            {activeTab === "pagar" && periodScope === "all" && (
+              <p className="text-[11px] text-text-3">
+                Busca global ativa: fornecedores e parcelas em todos os meses.
+              </p>
+            )}
 
             {selectedIds.length > 0 && (
               <div className="flex items-center gap-2 bg-accent-bg border border-accent-border rounded p-2">

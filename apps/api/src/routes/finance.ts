@@ -71,6 +71,35 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
         return d;
     }
 
+    function parseDateOnly(value: string | null | undefined) {
+        if (!value || typeof value !== "string") return null;
+        const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) return null;
+        const year = Number(match[1]);
+        const monthIndex = Number(match[2]) - 1;
+        const day = Number(match[3]);
+        if (monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) return null;
+        const parsed = new Date(year, monthIndex, day, 12, 0, 0, 0);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed;
+    }
+
+    function formatDateOnly(value: Date) {
+        const year = value.getFullYear();
+        const month = String(value.getMonth() + 1).padStart(2, "0");
+        const day = String(value.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+    }
+
+    function parseDateFlexible(value: string | null | undefined) {
+        const dateOnly = parseDateOnly(value);
+        if (dateOnly) return dateOnly;
+        if (!value || typeof value !== "string") return null;
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed;
+    }
+
     function moneyToCents(value: number) {
         return Math.round(value * 100);
     }
@@ -688,8 +717,8 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             return reply.status(400).send({ error: "Valor do contrato inválido." });
         }
 
-        const startDate = body.startDate ? new Date(body.startDate) : new Date();
-        if (Number.isNaN(startDate.getTime())) {
+        const startDate = body.startDate ? parseDateOnly(body.startDate) : new Date();
+        if (!startDate || Number.isNaN(startDate.getTime())) {
             return reply.status(400).send({ error: "Data inicial inválida." });
         }
         startDate.setHours(0, 0, 0, 0);
@@ -962,7 +991,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             success: true,
             data: pageItems.map((row) => ({
                 ...row,
-                dueDate: row.dueDate.toISOString(),
+                dueDate: formatDateOnly(row.dueDate),
                 paymentDate: row.paymentDate?.toISOString() || null,
                 createdAt: row.createdAt.toISOString(),
                 updatedAt: row.updatedAt.toISOString(),
@@ -990,7 +1019,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             success: true,
             data: {
                 ...tx,
-                dueDate: tx.dueDate.toISOString(),
+                dueDate: formatDateOnly(tx.dueDate),
                 paymentDate: tx.paymentDate?.toISOString() || null,
                 createdAt: tx.createdAt.toISOString(),
                 updatedAt: tx.updatedAt.toISOString(),
@@ -1055,7 +1084,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
 
             return {
                 id: row.id,
-                date: row.dueDate.toISOString(),
+                date: formatDateOnly(row.dueDate),
                 description: row.description,
                 type: row.type,
                 origin: row.origin,
@@ -1160,7 +1189,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
         if (amount <= 0) {
             return reply.status(400).send({ error: "Valor inválido" });
         }
-        const dueDate = body.dueDate ? new Date(body.dueDate) : null;
+        const dueDate = parseDateOnly(body.dueDate);
         if (!dueDate || Number.isNaN(dueDate.getTime())) {
             return reply.status(400).send({ error: "Data de vencimento inválida" });
         }
@@ -1237,15 +1266,15 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
         if (amount <= 0) {
             return reply.status(400).send({ error: "Valor inválido" });
         }
-        const dueDate = base.dueDate ? new Date(base.dueDate) : null;
+        const dueDate = parseDateOnly(base.dueDate);
         if (!dueDate || Number.isNaN(dueDate.getTime())) {
             return reply.status(400).send({ error: "Data de vencimento inválida" });
         }
 
         const installmentsCount = Math.min(36, Math.max(1, Number(body.installments?.count ?? 1)));
         const intervalDays = Math.max(1, Number(body.installments?.intervalDays ?? 30));
-        const firstDueDateRaw = body.installments?.firstDueDate ? new Date(body.installments.firstDueDate) : dueDate;
-        if (Number.isNaN(firstDueDateRaw.getTime())) {
+        const firstDueDateRaw = body.installments?.firstDueDate ? parseDateOnly(body.installments.firstDueDate) : dueDate;
+        if (!firstDueDateRaw || Number.isNaN(firstDueDateRaw.getTime())) {
             return reply.status(400).send({ error: "Primeiro vencimento inválido" });
         }
 
@@ -1409,7 +1438,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             }
 
             if (body.dueDate !== undefined) {
-                const parsedDate = body.dueDate ? new Date(body.dueDate) : null;
+                const parsedDate = parseDateOnly(body.dueDate);
                 if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
                     return reply.status(400).send({ error: "Data de vencimento inválida" });
                 }
@@ -1422,8 +1451,8 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                 }
                 updatePayload.status = body.status;
                 if (body.status === "paid") {
-                    const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
-                    if (Number.isNaN(paymentDate.getTime())) {
+                    const paymentDate = body.paymentDate ? parseDateFlexible(body.paymentDate) : new Date();
+                    if (!paymentDate || Number.isNaN(paymentDate.getTime())) {
                         return reply.status(400).send({ error: "Data de pagamento inválida" });
                     }
                     updatePayload.paymentDate = paymentDate;
@@ -1488,8 +1517,8 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             return reply.status(409).send({ error: "Transação cancelada não pode ser marcada como paga" });
         }
 
-        const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
-        if (Number.isNaN(paymentDate.getTime())) {
+        const paymentDate = body.paymentDate ? parseDateFlexible(body.paymentDate) : new Date();
+        if (!paymentDate || Number.isNaN(paymentDate.getTime())) {
             return reply.status(400).send({ error: "Data de pagamento inválida" });
         }
 
@@ -1527,8 +1556,8 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
             return reply.status(409).send({ error: "Nenhuma transação elegível para marcação de pagamento" });
         }
 
-        const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
-        if (Number.isNaN(paymentDate.getTime())) {
+        const paymentDate = body.paymentDate ? parseDateFlexible(body.paymentDate) : new Date();
+        if (!paymentDate || Number.isNaN(paymentDate.getTime())) {
             return reply.status(400).send({ error: "Data de pagamento inválida" });
         }
 

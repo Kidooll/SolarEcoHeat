@@ -1097,11 +1097,25 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           .limit(1);
 
         if (existingQuote) {
+          let existingStatus = existingQuote.status;
+          if ((existingQuote.status || "").toLowerCase() === "rascunho") {
+            const [updatedExisting] = await db
+              .update(quotes)
+              .set({
+                status: "enviado",
+                updatedAt: new Date(),
+              })
+              .where(eq(quotes.id, existingQuote.id))
+              .returning({
+                status: quotes.status,
+              });
+            existingStatus = updatedExisting?.status || "enviado";
+          }
           return reply.send({
             success: true,
             data: {
               quoteId: existingQuote.id,
-              status: existingQuote.status,
+              status: existingStatus,
               alreadyExisted: true,
             },
           });
@@ -1153,7 +1167,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
             discountTotal: "0.00",
             grandTotal: "0.00",
             materialsIncluded: false,
-            status: "rascunho",
+            status: "enviado",
             notes: handoffText,
           })
           .returning({

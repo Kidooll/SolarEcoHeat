@@ -7,6 +7,7 @@ import { BottomNav } from "@/components/layout/bottom-nav";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
 import Link from "next/link";
+import { getSystemTypeIcon, getSystemTypeLabel, SYSTEM_TYPE_OPTIONS } from "@/lib/system-type";
 
 export default function AdminUnitDetailPage() {
     const params = useParams();
@@ -19,7 +20,7 @@ export default function AdminUnitDetailPage() {
 
     const [isAddingSystem, setIsAddingSystem] = useState(false);
     const [newSystemName, setNewSystemName] = useState("");
-    const [newSystemType, setNewSystemType] = useState("AQUECIMENTO SOLAR");
+    const [newSystemType, setNewSystemType] = useState("solar");
 
     const fetchData = async () => {
         setLoading(true);
@@ -106,10 +107,11 @@ export default function AdminUnitDetailPage() {
                                         onChange={(e) => setNewSystemType(e.target.value)}
                                         className="w-full bg-bg border border-border rounded px-3 py-2 text-sm text-text focus:border-brand focus-visible:outline-none appearance-none"
                                     >
-                                        <option value="AQUECIMENTO SOLAR">AQUECIMENTO SOLAR</option>
-                                        <option value="BOMBAS HIDRÁULICAS">BOMBAS HIDRÁULICAS</option>
-                                        <option value="CALDEIRAS A GÁS">CALDEIRAS A GÁS</option>
-                                        <option value="SISTEMA DE INCÊNDIO">SISTEMA DE INCÊNDIO</option>
+                                        {SYSTEM_TYPE_OPTIONS.map((typeOption) => (
+                                            <option key={typeOption.value} value={typeOption.value}>
+                                                {typeOption.label}
+                                            </option>
+                                        ))}
                                     </select>
                                 </div>
                                 <div className="flex gap-2">
@@ -135,7 +137,7 @@ export default function AdminUnitDetailPage() {
                                     <div className="flex justify-between items-start mb-2">
                                         <div className="flex items-center gap-3">
                                             <span className="material-symbols-outlined text-brand/80">
-                                                {sys.type.includes('SOLAR') ? 'solar_power' : sys.type.includes('BOMBA') ? 'water_drop' : 'settings'}
+                                                {getSystemTypeIcon(sys.type)}
                                             </span>
                                             <h3 className="text-sm font-bold text-text uppercase tracking-tight">{sys.name}</h3>
                                         </div>
@@ -143,7 +145,7 @@ export default function AdminUnitDetailPage() {
                                     </div>
                                     <div className="flex justify-between items-center mt-2">
                                         <span className="text-[8px] font-bold uppercase tracking-widest bg-brand/10 text-brand border border-brand/20 px-1.5 py-0.5 rounded">
-                                            {sys.type}
+                                            {getSystemTypeLabel(sys.type)}
                                         </span>
                                         <span className="text-[9px] font-mono text-text-3 uppercase">ID: #{sys.id.split('-')[0]}</span>
                                     </div>

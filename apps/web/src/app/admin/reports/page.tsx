@@ -38,7 +38,12 @@ interface CriticalAlertQueueStatus {
     workerCompletedTotal: number;
     workerFailedTotal: number;
     lastWorkerError: string | null;
+    lastWorkerCompletedAt?: string | null;
+    lastWorkerFailedAt?: string | null;
     lastWebhookStatus: number | null;
+    lastWebhookLatencyMs?: number | null;
+    lastWebhookError?: string | null;
+    lastQueueAddError?: string | null;
     lastDispatchAt: string | null;
   };
   jobCounts: {
@@ -48,6 +53,13 @@ interface CriticalAlertQueueStatus {
     failed?: number;
     delayed?: number;
     paused?: number;
+  } | null;
+  sla?: {
+    oldestWaitingMs: number | null;
+    oldestDelayedMs: number | null;
+    deliverySuccessRate: number;
+    fallbackRate: number;
+    degraded: boolean;
   } | null;
 }
 
@@ -66,6 +78,25 @@ interface FailedCriticalJob {
   };
 }
 
+interface SyncConflictItem {
+  id: string;
+  entity: string;
+  entityId: string;
+  clientVersion: number | null;
+  serverVersion: number | null;
+  resolution: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
+function syncResolutionLabel(value: string | null) {
+  const normalized = (value || "").toLowerCase();
+  if (!normalized) return "aberto";
+  if (normalized === "client_retry") return "client_retry (aguardando)";
+  if (normalized === "client_retry_applied") return "client_retry (aplicado)";
+  return normalized;
+}
+
 const REPORT_TYPES: { type: ReportType; label: string; description: string }[] = [
   { type: "attendance", label: "Por Atendimento", description: "Checklist, ocorrências e estados finais" },
   { type: "system", label: "Por Sistema", description: "Linha do tempo e evolução técnica" },
@@ -82,6 +113,10 @@ export default function AdminReportsPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [syncConflictsLoading, setSyncConflictsLoading] = useState(false);
+  const [syncConflictsError, setSyncConflictsError] = useState("");
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflictItem[]>([]);
+  const [resolvingConflictId, setResolvingConflictId] = useState<string | null>(null);
   const [criticalOpsLoading, setCriticalOpsLoading] = useState(false);
   const [criticalOpsError, setCriticalOpsError] = useState("");
   const [criticalStatus, setCriticalStatus] = useState<CriticalAlertQueueStatus | null>(null);
@@ -129,11 +164,46 @@ export default function AdminReportsPage() {
     }
   };
 
+  const loadSyncConflicts = async () => {
+    try {
+      setSyncConflictsLoading(true);
+      setSyncConflictsError("");
+      const response = await apiFetch<{ success: boolean; data: SyncConflictItem[] }>(
+        "/api/admin/sync/conflicts?limit=20",
+      );
+      setSyncConflicts(response.data || []);
+    } catch (syncConflictError: any) {
+      setSyncConflictsError(syncConflictError.message || "Falha ao carregar conflitos de sincronização.");
+    } finally {
+      setSyncConflictsLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadAuditLogs();
     loadCriticalOps();
+    loadSyncConflicts();
     return () => stopPolling();
   }, []);
+
+  const handleResolveSyncConflict = async (
+    id: string,
+    resolution: "admin_resolved" | "server_wins" | "client_retry" | "ignored",
+  ) => {
+    try {
+      setResolvingConflictId(id);
+      setSyncConflictsError("");
+      await apiFetch<{ success: boolean; data: SyncConflictItem }>(`/api/admin/sync/conflicts/${id}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolution }),
+      });
+      await loadSyncConflicts();
+    } catch (resolveError: any) {
+      setSyncConflictsError(resolveError.message || "Falha ao resolver conflito.");
+    } finally {
+      setResolvingConflictId(null);
+    }
+  };
 
   const criticalBacklogCount =
     (criticalStatus?.jobCounts?.waiting || 0) +
@@ -141,6 +211,7 @@ export default function AdminReportsPage() {
     (criticalStatus?.jobCounts?.delayed || 0) +
     (criticalStatus?.jobCounts?.paused || 0);
   const hasCriticalBacklogAlert = criticalBacklogCount >= 10 || (criticalStatus?.jobCounts?.failed || 0) >= 3;
+  const hasCriticalSlaAlert = Boolean(criticalStatus?.sla?.degraded);
 
   const startPolling = (jobId: string) => {
     stopPolling();
@@ -299,10 +370,9 @@ export default function AdminReportsPage() {
             <p className="text-xs text-text-3 mt-3">Carregando monitoramento...</p>
           ) : (
             <>
-              {hasCriticalBacklogAlert && (
+              {(hasCriticalBacklogAlert || hasCriticalSlaAlert) && (
                 <div className="mt-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
-                  Alerta de backlog: fila crítica com {criticalBacklogCount} item(ns) pendente(s). Recomendado revisar e
-                  reprocessar falhas.
+                  Alerta operacional: backlog/SLA degradado no push crítico. Recomendado revisar fila e falhas.
                 </div>
               )}
 
@@ -344,6 +414,26 @@ export default function AdminReportsPage() {
                   <span className="font-mono text-text-3">Último dispatch:</span>{" "}
                   {criticalStatus?.metrics?.lastDispatchAt
                     ? new Date(criticalStatus.metrics.lastDispatchAt).toLocaleString("pt-BR")
+                    : "-"}
+                </p>
+                <p>
+                  <span className="font-mono text-text-3">SLA fila (mais antigo):</span>{" "}
+                  {criticalStatus?.sla?.oldestWaitingMs != null
+                    ? `${Math.round(criticalStatus.sla.oldestWaitingMs / 1000)}s`
+                    : "-"}
+                </p>
+                <p>
+                  <span className="font-mono text-text-3">Taxa de entrega:</span>{" "}
+                  {criticalStatus?.sla ? `${(criticalStatus.sla.deliverySuccessRate * 100).toFixed(1)}%` : "-"}
+                </p>
+                <p>
+                  <span className="font-mono text-text-3">Uso de fallback:</span>{" "}
+                  {criticalStatus?.sla ? `${(criticalStatus.sla.fallbackRate * 100).toFixed(1)}%` : "-"}
+                </p>
+                <p>
+                  <span className="font-mono text-text-3">Latência webhook:</span>{" "}
+                  {criticalStatus?.metrics?.lastWebhookLatencyMs != null
+                    ? `${criticalStatus.metrics.lastWebhookLatencyMs}ms`
                     : "-"}
                 </p>
               </div>
@@ -394,6 +484,106 @@ export default function AdminReportsPage() {
                 </table>
               </div>
             </>
+          )}
+        </div>
+
+        <div className="bg-surface border border-border rounded p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-text-3">Sync Review</p>
+              <p className="text-sm font-semibold mt-1">Conflitos de Sincronização</p>
+            </div>
+            <button
+              type="button"
+              onClick={loadSyncConflicts}
+              disabled={syncConflictsLoading}
+              className="h-8 px-3 rounded border border-border-2 text-xs text-text-2 hover:bg-surface-3 disabled:opacity-60"
+            >
+              Atualizar
+            </button>
+          </div>
+
+          {syncConflictsError && (
+            <div className="mt-3 border border-crit/40 bg-crit/10 text-crit rounded p-2 text-xs">
+              {syncConflictsError}
+            </div>
+          )}
+
+          {syncConflictsLoading ? (
+            <p className="text-xs text-text-3 mt-3">Carregando conflitos...</p>
+          ) : syncConflicts.length === 0 ? (
+            <p className="text-xs text-text-3 mt-3">Sem conflitos recentes de sincronização.</p>
+          ) : (
+            <div className="mt-3 border border-border rounded overflow-x-auto">
+              <table className="min-w-full text-xs">
+                <thead className="bg-surface-2 border-b border-border">
+                  <tr className="text-[10px] font-mono uppercase tracking-widest text-text-3">
+                    <th className="p-2 text-left">Quando</th>
+                    <th className="p-2 text-left">Entidade</th>
+                    <th className="p-2 text-left">Registro</th>
+                    <th className="p-2 text-left">Versão</th>
+                    <th className="p-2 text-left">Status</th>
+                    <th className="p-2 text-left">Ação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {syncConflicts.map((item) => {
+                    const resolved = Boolean(item.resolution || item.resolvedAt);
+                    return (
+                      <tr key={item.id} className="border-b border-border last:border-b-0">
+                        <td className="p-2 font-mono whitespace-nowrap">
+                          {new Date(item.createdAt).toLocaleString("pt-BR")}
+                        </td>
+                        <td className="p-2 font-mono">{item.entity}</td>
+                        <td className="p-2 font-mono text-text-2">{item.entityId.slice(0, 8)}</td>
+                        <td className="p-2 font-mono text-text-2">
+                          c:{item.clientVersion ?? "-"} / s:{item.serverVersion ?? "-"}
+                        </td>
+                        <td className="p-2">
+                          {resolved ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded border border-brand/40 bg-brand/10 text-brand font-mono uppercase">
+                              {syncResolutionLabel(item.resolution)}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded border border-warn/40 bg-warn/10 text-warn font-mono uppercase">
+                              aberto
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleResolveSyncConflict(item.id, "admin_resolved")}
+                              disabled={resolved || resolvingConflictId === item.id}
+                              className="h-7 px-2 rounded border border-brand/40 bg-brand/10 text-[10px] font-mono uppercase text-brand hover:bg-brand/20 disabled:opacity-50"
+                            >
+                              Resolver
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleResolveSyncConflict(item.id, "client_retry")}
+                              disabled={resolved || resolvingConflictId === item.id}
+                              className="h-7 px-2 rounded border border-accent-border bg-accent-bg text-[10px] font-mono uppercase text-accent hover:opacity-90 disabled:opacity-50"
+                            >
+                              Client Retry
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleResolveSyncConflict(item.id, "ignored")}
+                              disabled={resolved || resolvingConflictId === item.id}
+                              className="h-7 px-2 rounded border border-border text-[10px] font-mono uppercase text-text-2 hover:bg-surface-2 disabled:opacity-50"
+                            >
+                              Ignorar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

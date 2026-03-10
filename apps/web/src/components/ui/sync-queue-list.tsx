@@ -78,16 +78,29 @@ export function SyncQueueList({
                                             <span className="text-[10px] font-mono text-text-3">{err.time}</span>
                                         </div>
                                         <p className="text-xs text-error font-medium mb-3 flex items-center gap-1 font-mono">
-                                            <span className="material-symbols-outlined text-[14px]">warning</span>
-                                            {err.error}
+                                            <span className="material-symbols-outlined text-[14px]">
+                                                {err.status === "conflict" ? "merge_type" : "warning"}
+                                            </span>
+                                            {err.status === "conflict" ? `Conflito: ${err.error}` : err.error}
                                         </p>
+                                        {err.conflictId && (
+                                            <p className="text-[10px] text-text-3 font-mono mb-2">
+                                                conflictId: {String(err.conflictId).slice(0, 8)}
+                                            </p>
+                                        )}
+                                        {err.status === "conflict" && !err.retryAllowed && (
+                                            <p className="text-[10px] text-warn font-mono mb-2">
+                                                Conflito não recuperável no app. Requer revisão no painel Admin.
+                                            </p>
+                                        )}
                                         <div className="flex gap-2 mt-2">
                                             <button
                                                 onClick={() => onRetry(err.id)}
-                                                className="flex-1 px-3 py-1.5 rounded text-xs font-semibold bg-surface-2 text-text hover:bg-surface-3 transition-colors flex items-center justify-center gap-1"
+                                                disabled={err.status === "conflict" && !err.retryAllowed}
+                                                className="flex-1 px-3 py-1.5 rounded text-xs font-semibold bg-surface-2 text-text hover:bg-surface-3 transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
                                             >
                                                 <span className="material-symbols-outlined text-[16px]">refresh</span>
-                                                Reenviar
+                                                {err.status === "conflict" && !err.retryAllowed ? "Aguardar Admin" : "Reenviar"}
                                             </button>
                                             <button
                                                 onClick={() => onDelete(err.id)}

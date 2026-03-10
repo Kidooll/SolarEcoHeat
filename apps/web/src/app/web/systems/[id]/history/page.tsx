@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { serverApiFetch } from "@/lib/server-api";
+import { getSystemTypeLabel } from "@/lib/system-type";
 
 type HistoryResponse = {
   success: boolean;
@@ -10,6 +11,9 @@ type HistoryResponse = {
       name: string;
       unit_name: string;
       status: "Normal" | "Atenção" | "Crítico";
+      identity?: {
+        type?: string;
+      };
     };
     timeline: Array<{
       type: "Preventiva" | "Corretiva" | "Instalação";
@@ -32,13 +36,18 @@ export default async function WebSystemHistoryPage({ params }: { params: { id: s
 
   const system = response.data.system;
   const timeline = response.data.timeline || [];
+  const systemTypeLabel = getSystemTypeLabel(system.identity?.type || "");
 
   return (
     <div className="min-h-screen bg-bg text-text p-6">
       <main className="max-w-5xl mx-auto space-y-4">
         <header>
           <h1 className="text-2xl font-bold">Histórico • {system.name}</h1>
-          <p className="text-sm text-text-3">{system.unit_name} • {system.status}</p>
+          <p className="text-sm text-text-3">
+            {system.unit_name}
+            {systemTypeLabel !== "-" ? ` • ${systemTypeLabel}` : ""}
+            {` • ${system.status}`}
+          </p>
         </header>
 
         <section className="border border-border rounded bg-surface p-4 space-y-3">

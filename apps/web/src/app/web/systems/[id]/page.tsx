@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { serverApiFetch } from "@/lib/server-api";
+import { getSystemTypeLabel } from "@/lib/system-type";
 
 type SystemDetailResponse = {
   success: boolean;
@@ -42,7 +43,7 @@ export default async function WebSystemDetailPage({ params }: { params: { id: st
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold leading-tight">{system.client_name} • {system.unit_name}</h1>
-            <p className="text-sm text-text-3">{system.name} • {system.type}</p>
+            <p className="text-sm text-text-3">{system.name} • {getSystemTypeLabel(system.type)}</p>
           </div>
           <Link href={`/web/systems/${params.id}/history`} className="px-3 py-2 text-xs border border-border rounded hover:border-brand/40">
             Ver histórico

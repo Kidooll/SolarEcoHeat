@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { SYSTEM_TYPE_OPTIONS } from "@/lib/system-type";
 
 interface SystemFormSheetProps {
     isOpen: boolean;
@@ -17,7 +18,7 @@ export function SystemFormSheet({ isOpen, onClose, onSuccess }: SystemFormSheetP
 
     const [unitId, setUnitId] = useState("");
     const [name, setName] = useState("");
-    const [type, setType] = useState("AQUECIMENTO SOLAR");
+    const [type, setType] = useState("solar");
 
     useEffect(() => {
         if (isOpen) {
@@ -113,17 +114,17 @@ export function SystemFormSheet({ isOpen, onClose, onSuccess }: SystemFormSheetP
                         <div className="space-y-2">
                             <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest font-bold">Tipo de Ativo</label>
                             <div className="grid grid-cols-2 gap-2">
-                                {["AQUECIMENTO SOLAR", "BOMBAS HIDRÁULICAS", "CALDEIRAS A GÁS", "SISTEMA DE INCÊNDIO"].map((t) => (
+                                {SYSTEM_TYPE_OPTIONS.map((t) => (
                                     <button
-                                        key={t}
+                                        key={t.value}
                                         type="button"
-                                        onClick={() => setType(t)}
-                                        className={`px-3 py-2.5 rounded-md text-[9px] font-bold font-mono transition-all border ${type === t
+                                        onClick={() => setType(t.value)}
+                                        className={`px-3 py-2.5 rounded-md text-[9px] font-bold font-mono transition-all border ${type === t.value
                                                 ? "bg-primary/20 border-primary text-primary shadow-lg shadow-primary/10"
                                                 : "bg-background-dark border-white/5 text-slate-500 hover:border-white/20"
                                             }`}
                                     >
-                                        {t}
+                                        {t.label}
                                     </button>
                                 ))}
                             </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { initDB, addToSyncQueue } from "@/utils/indexed-db";
 import { apiFetch } from "@/lib/api";
+import { getSystemTypeIcon } from "@/lib/system-type";
 
 export interface ComponentState {
     id: string;
@@ -20,14 +21,6 @@ export interface SystemState {
     locked?: boolean;
     components: ComponentState[];
 }
-
-const getIconForType = (type: string) => {
-    const t = type.toLowerCase();
-    if (t.includes('solar')) return 'solar_power';
-    if (t.includes('bomba') || t.includes('hidro')) return 'water_drop';
-    if (t.includes('gás')) return 'mode_fan';
-    return 'settings_input_component';
-};
 
 export function useMaintenance(attendanceId: string) {
     const [systems, setSystems] = useState<SystemState[]>([]);
@@ -79,7 +72,7 @@ export function useMaintenance(attendanceId: string) {
                     const systemsWithComponents = response.data.systems.map((sys) => ({
                         id: sys.id,
                         name: sys.name,
-                        icon: getIconForType(sys.type),
+                        icon: getSystemTypeIcon(sys.type),
                         locked: !!sys.locked,
                         components: (sys.components || []).map((c) => ({
                             id: c.id,

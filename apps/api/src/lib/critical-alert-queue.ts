@@ -35,7 +35,12 @@ const metrics = {
   workerCompletedTotal: 0,
   workerFailedTotal: 0,
   lastWorkerError: null as string | null,
+  lastWorkerCompletedAt: null as string | null,
+  lastWorkerFailedAt: null as string | null,
   lastWebhookStatus: null as number | null,
+  lastWebhookLatencyMs: null as number | null,
+  lastWebhookError: null as string | null,
+  lastQueueAddError: null as string | null,
   lastDispatchAt: null as string | null,
 };
 
@@ -91,6 +96,7 @@ async function sendWebhookNow(payload: CriticalOccurrenceAlertPayload) {
     throw new Error("CRITICAL_PUSH_WEBHOOK_URL_NOT_CONFIGURED");
   }
 
+  const startedAt = Date.now();
   const response = await fetch(PUSH_WEBHOOK_URL, {
     method: "POST",
     headers: {
@@ -102,11 +108,14 @@ async function sendWebhookNow(payload: CriticalOccurrenceAlertPayload) {
     }),
   });
 
+  metrics.lastWebhookLatencyMs = Date.now() - startedAt;
   metrics.lastWebhookStatus = response.status;
   if (!response.ok) {
     const raw = await response.text();
+    metrics.lastWebhookError = `HTTP ${response.status}`;
     throw new Error(`Push webhook falhou: HTTP ${response.status} - ${raw.slice(0, 500)}`);
   }
+  metrics.lastWebhookError = null;
 }
 
 export function isCriticalAlertQueueEnabled() {
@@ -137,6 +146,7 @@ export async function dispatchCriticalOccurrenceAlert(payload: CriticalOccurrenc
     } catch (error) {
       metrics.enqueueErrorTotal += 1;
       const message = error instanceof Error ? error.message : "QUEUE_ADD_ERROR";
+      metrics.lastQueueAddError = message;
       if (!PUSH_WEBHOOK_URL) {
         return {
           ok: false as const,
@@ -192,10 +202,12 @@ export async function getCriticalAlertQueueStatus() {
     return {
       ...base,
       jobCounts: null,
+      sla: null,
     };
   }
 
-  const jobCounts = await getQueue().getJobCounts(
+  const currentQueue = getQueue();
+  const jobCounts = await currentQueue.getJobCounts(
     "waiting",
     "active",
     "completed",
@@ -204,9 +216,38 @@ export async function getCriticalAlertQueueStatus() {
     "paused",
   );
 
+  const [oldestWaiting] = await currentQueue.getWaiting(0, 0);
+  const [oldestDelayed] = await currentQueue.getDelayed(0, 0);
+  const now = Date.now();
+  const oldestWaitingMs =
+    oldestWaiting?.timestamp && Number.isFinite(oldestWaiting.timestamp)
+      ? Math.max(0, now - oldestWaiting.timestamp)
+      : null;
+  const oldestDelayedMs =
+    oldestDelayed?.timestamp && Number.isFinite(oldestDelayed.timestamp)
+      ? Math.max(0, now - oldestDelayed.timestamp)
+      : null;
+
+  const totalDelivered = metrics.workerCompletedTotal + metrics.directFallbackTotal;
+  const totalAttempts = totalDelivered + metrics.workerFailedTotal + metrics.enqueueErrorTotal;
+  const deliverySuccessRate = totalAttempts > 0 ? Number((totalDelivered / totalAttempts).toFixed(4)) : 1;
+  const fallbackRate = totalAttempts > 0 ? Number((metrics.directFallbackTotal / totalAttempts).toFixed(4)) : 0;
+
+  const sla = {
+    oldestWaitingMs,
+    oldestDelayedMs,
+    deliverySuccessRate,
+    fallbackRate,
+    degraded:
+      (jobCounts.failed || 0) >= 3 ||
+      (jobCounts.waiting || 0) >= 10 ||
+      (oldestWaitingMs !== null && oldestWaitingMs > 10 * 60 * 1000),
+  };
+
   return {
     ...base,
     jobCounts,
+    sla,
   };
 }
 
@@ -265,12 +306,14 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
 
   worker.on("completed", (job: any) => {
     metrics.workerCompletedTotal += 1;
+    metrics.lastWorkerCompletedAt = new Date().toISOString();
     logger.info({ jobId: job.id, occurrenceId: job.data.occurrenceId }, "Push crítico processado com sucesso.");
   });
 
   worker.on("failed", (job: any, err: any) => {
     metrics.workerFailedTotal += 1;
     metrics.lastWorkerError = err?.message || "WORKER_FAILED";
+    metrics.lastWorkerFailedAt = new Date().toISOString();
     logger.error(
       { jobId: job?.id, occurrenceId: job?.data?.occurrenceId, error: err?.message },
       "Falha no processamento de push crítico.",
