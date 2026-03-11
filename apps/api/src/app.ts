@@ -43,19 +43,23 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const isTestMode = !!options.testUser;
   const modules = options.modules ?? ["sync", "finance", "reports", "admin", "app", "auth"];
   const allowedOrigins = getAllowedOrigins();
+  const isVercelRuntime = process.env.VERCEL === "1";
+  const isProduction = process.env.NODE_ENV === "production";
 
   const server: FastifyInstance = fastify({
     logger: isTestMode
       ? false
-      : {
-          transport: {
-            target: "pino-pretty",
-            options: {
-              translateTime: "HH:MM:ss Z",
-              ignore: "pid,hostname",
+      : (isProduction || isVercelRuntime)
+        ? true
+        : {
+            transport: {
+              target: "pino-pretty",
+              options: {
+                translateTime: "HH:MM:ss Z",
+                ignore: "pid,hostname",
+              },
             },
           },
-        },
   });
 
   server.register(cors, {
@@ -92,7 +96,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     return { status: "ok", timestamp: new Date().toISOString() };
   });
 
-  if (!isTestMode) {
+  if (!isTestMode && !isVercelRuntime) {
     await startCriticalOccurrenceAlertWorker(server.log);
     server.addHook("onClose", async () => {
       await stopCriticalOccurrenceAlertWorker();
