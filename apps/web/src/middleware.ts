@@ -18,26 +18,15 @@ function getUserRole(user: any): AppRole {
 }
 
 function getDefaultRouteByRole(role: AppRole): string {
-    if (role === "admin") return "/admin";
+    if (role === "admin") return "/admin/web";
     if (role === "client") return "/web/systems";
     return "/pwa/dashboard";
-}
-
-function isMobileDeviceRequest(request: NextRequest): boolean {
-    const userAgent = request.headers.get("user-agent") || "";
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(userAgent);
 }
 
 function toWebAdminPath(pathname: string): string {
     if (pathname === "/admin") return "/admin/web";
     if (pathname.startsWith("/admin/web")) return pathname;
     return pathname.replace(/^\/admin/, "/admin/web");
-}
-
-function toMobileAdminPath(pathname: string): string {
-    if (pathname === "/admin/web") return "/admin";
-    if (pathname.startsWith("/admin/web/")) return pathname.replace(/^\/admin\/web/, "/admin");
-    return pathname;
 }
 
 export async function middleware(request: NextRequest) {
@@ -137,45 +126,18 @@ export async function middleware(request: NextRequest) {
             return NextResponse.redirect(new URL(getDefaultRouteByRole(userRole), request.url));
         }
 
-        const forceMobileQuery = request.nextUrl.searchParams.get("force_mobile") === "1";
-        const forceWebQuery = request.nextUrl.searchParams.get("force_web") === "1";
-        const adminViewPref = request.cookies.get("admin_view_pref")?.value;
-        const mobilePrefCookie = adminViewPref === "mobile";
-        const webPrefCookie = adminViewPref === "web";
-        const isMobileDevice = isMobileDeviceRequest(request);
         const pathname = request.nextUrl.pathname;
+        const forceMobileQuery = request.nextUrl.searchParams.get("force_mobile");
+        const forceWebQuery = request.nextUrl.searchParams.get("force_web");
+        const desktopPath = toWebAdminPath(pathname);
+        const hasLegacyQuery = forceMobileQuery === "1" || forceWebQuery === "1";
 
-        if (forceMobileQuery || forceWebQuery) {
+        if (desktopPath !== pathname || hasLegacyQuery) {
             const targetUrl = request.nextUrl.clone();
+            targetUrl.pathname = desktopPath;
             targetUrl.searchParams.delete("force_mobile");
             targetUrl.searchParams.delete("force_web");
-
-            const response = NextResponse.redirect(targetUrl);
-            if (forceMobileQuery) {
-                response.cookies.set("admin_view_pref", "mobile", { path: "/" });
-            }
-            if (forceWebQuery) {
-                response.cookies.set("admin_view_pref", "web", { path: "/" });
-            }
-            return response;
-        }
-
-        const useMobileAdmin = webPrefCookie ? false : (mobilePrefCookie || isMobileDevice);
-
-        if (useMobileAdmin) {
-            const mobilePath = toMobileAdminPath(pathname);
-            if (mobilePath !== pathname) {
-                const targetUrl = request.nextUrl.clone();
-                targetUrl.pathname = mobilePath;
-                return NextResponse.redirect(targetUrl);
-            }
-        } else {
-            const desktopPath = toWebAdminPath(pathname);
-            if (desktopPath !== pathname) {
-                const targetUrl = request.nextUrl.clone();
-                targetUrl.pathname = desktopPath;
-                return NextResponse.redirect(targetUrl);
-            }
+            return NextResponse.redirect(targetUrl);
         }
     }
 

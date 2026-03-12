@@ -77,7 +77,7 @@ export default function AdminDashboardPage() {
                 {!isWebAdminContext && (
                     <section className="px-4 pt-4">
                         <Link
-                            href="/admin/web?force_web=1"
+                            href="/admin/web"
                             className="h-10 border border-border rounded-sm px-3 flex items-center justify-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-text-2 hover:text-text hover:bg-surface-2 transition-colors"
                         >
                             <span className="material-symbols-outlined text-[18px]">desktop_windows</span>

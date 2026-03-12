@@ -221,13 +221,13 @@ export default function AdminWebLayout({ children }: { children: React.ReactNode
                     </div>
                     <div className="relative group">
                         <Link
-                            href="/admin?force_mobile=1"
+                            href="/pwa/dashboard"
                             className="h-11 px-3 rounded-lg flex items-center gap-2.5 text-sm text-text-3 hover:bg-surface-2 hover:text-text transition-colors"
                         >
-                            <span className="material-symbols-outlined text-[18px]">phone_iphone</span>
-                            {!collapsed && <span>Painel Mobile</span>}
+                            <span className="material-symbols-outlined text-[18px]">smartphone</span>
+                            {!collapsed && <span>Abrir PWA</span>}
                         </Link>
-                        {collapsed && <span className={tooltipClassName}>Painel Mobile</span>}
+                        {collapsed && <span className={tooltipClassName}>Abrir PWA</span>}
                     </div>
                 </div>
             </aside>
