@@ -218,7 +218,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                 createdAt: occurrences.createdAt,
               })
               .from(occurrences)
-              .where(sql`${occurrences.status} = 'aberta' AND ${occurrences.systemId} = ANY(${scopedSystemIds}::uuid[])`)
+              .where(and(eq(occurrences.status, "aberta"), inArray(occurrences.systemId, scopedSystemIds)))
           : [];
 
         const stats = {
@@ -242,7 +242,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           ? await db
               .select({ id: technicalUnits.id, name: technicalUnits.name, address: technicalUnits.address })
               .from(technicalUnits)
-              .where(sql`${technicalUnits.id} = ANY(${unitIds}::uuid[])`)
+              .where(inArray(technicalUnits.id, unitIds))
           : [];
         const unitsMap = new Map(units.map((unit) => [unit.id, unit]));
 
