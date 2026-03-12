@@ -224,6 +224,37 @@ export default function QuoteDetailPage() {
         </div>
 
         {error ? <div className="no-print rounded border border-crit-border bg-crit-bg px-4 py-3 text-sm text-crit">{error}</div> : null}
+        {documentData?.handoff ? (
+          <div className="no-print border border-border bg-surface px-4 py-3">
+            <p className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3 mb-2">Trilha do handoff técnico</p>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3 text-xs">
+              <div className="rounded border border-border bg-surface-2 px-2 py-1.5">
+                <span className="text-text-3">Urgência</span>
+                <p className="font-semibold text-text mt-0.5 uppercase">{documentData.handoff.urgency || "não informada"}</p>
+              </div>
+              <div className="rounded border border-border bg-surface-2 px-2 py-1.5">
+                <span className="text-text-3">Estágio</span>
+                <p className="font-semibold text-text mt-0.5">{documentData.handoff.stage}</p>
+              </div>
+              <div className="rounded border border-border bg-surface-2 px-2 py-1.5">
+                <span className="text-text-3">Financeiros vinculados</span>
+                <p className="font-semibold text-text mt-0.5">{documentData.handoff.linkedFinanceCount}</p>
+              </div>
+            </div>
+            {documentData.handoff.customerContext ? (
+              <div className="mt-2 rounded border border-border bg-surface-2 px-2 py-1.5 text-xs">
+                <span className="text-text-3">Contexto do cliente</span>
+                <p className="text-text mt-0.5 whitespace-pre-wrap">{documentData.handoff.customerContext}</p>
+              </div>
+            ) : null}
+            {documentData.handoff.recommendedScope ? (
+              <div className="mt-2 rounded border border-border bg-surface-2 px-2 py-1.5 text-xs">
+                <span className="text-text-3">Recomendação técnica</span>
+                <p className="text-text mt-0.5 whitespace-pre-wrap">{documentData.handoff.recommendedScope}</p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="rounded-b border border-border bg-surface p-5">

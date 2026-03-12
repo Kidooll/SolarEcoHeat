@@ -13,6 +13,11 @@ type QuoteRow = {
     isPwaHandoff?: boolean;
     linkedFinanceCount?: number;
     handoffStage?: "none" | "awaiting_admin" | "approved_financial" | "rejected";
+    handoff?: {
+        urgency: "baixa" | "media" | "alta" | null;
+        customerContext: string | null;
+        recommendedScope: string | null;
+    } | null;
     issueDate: string | null;
     validUntil: string | null;
     grandTotal: string;
@@ -38,6 +43,13 @@ function statusClass(status: string) {
     if (status === "recusado") return "border-crit/40 bg-crit/10 text-crit";
     if (status === "enviado") return "border-accent-border bg-accent-bg text-accent";
     return "border-warn-border bg-warn-bg text-warn";
+}
+
+function handoffStageLabel(stage: QuoteRow["handoffStage"]) {
+    if (stage === "approved_financial") return "aprovado + financeiro";
+    if (stage === "rejected") return "recusado";
+    if (stage === "awaiting_admin") return "aguardando admin";
+    return "sem handoff";
 }
 
 export default function AdminQuotesPage() {
@@ -226,7 +238,12 @@ export default function AdminQuotesPage() {
                                                     </span>
                                                     {quote.isPwaHandoff && (
                                                         <span className="inline-flex h-7 items-center rounded border border-accent-border bg-accent-bg px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-accent">
-                                                            handoff
+                                                            handoff{quote.handoff?.urgency ? ` · ${quote.handoff.urgency}` : ""}
+                                                        </span>
+                                                    )}
+                                                    {quote.isPwaHandoff && (
+                                                        <span className="inline-flex h-7 items-center rounded border border-border bg-surface-2 px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                                            {handoffStageLabel(quote.handoffStage)}
                                                         </span>
                                                     )}
                                                 </div>
@@ -288,7 +305,12 @@ export default function AdminQuotesPage() {
                                                                 </span>
                                                                 {quote.isPwaHandoff && (
                                                                     <span className="inline-flex h-7 items-center rounded border border-accent-border bg-accent-bg px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-accent">
-                                                                        handoff
+                                                                        handoff{quote.handoff?.urgency ? ` · ${quote.handoff.urgency}` : ""}
+                                                                    </span>
+                                                                )}
+                                                                {quote.isPwaHandoff && (
+                                                                    <span className="inline-flex h-7 items-center rounded border border-border bg-surface-2 px-2 text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                                                        {handoffStageLabel(quote.handoffStage)}
                                                                     </span>
                                                                 )}
                                                             </div>

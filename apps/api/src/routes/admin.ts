@@ -258,6 +258,66 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return null;
   }
 
+  function parsePwaHandoffFromNotes(notes: string | null | undefined) {
+    const lines = String(notes || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const hasOrigin = lines.includes("ORIGEM: PWA_OCORRENCIA_CRITICA");
+    if (!hasOrigin) return null;
+
+    const getValue = (prefix: string) => {
+      const line = lines.find((item) => item.startsWith(prefix));
+      if (!line) return null;
+      return line.slice(prefix.length).trim() || null;
+    };
+
+    const urgencyRaw = getValue("PWA_HANDOFF_URGENCY:");
+    const urgencyNormalized = (urgencyRaw || "").toLowerCase();
+    const urgency =
+      urgencyNormalized === "alta" || urgencyNormalized === "media" || urgencyNormalized === "baixa"
+        ? urgencyNormalized
+        : null;
+
+    const handoffJsonRaw = getValue("PWA_HANDOFF_JSON:");
+    let handoffJson: Record<string, unknown> | null = null;
+    if (handoffJsonRaw) {
+      try {
+        const parsed = JSON.parse(handoffJsonRaw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          handoffJson = parsed as Record<string, unknown>;
+        }
+      } catch {
+        handoffJson = null;
+      }
+    }
+
+    return {
+      isPwaHandoff: true as const,
+      urgency,
+      customerContext: getValue("PWA_HANDOFF_CUSTOMER_CONTEXT:"),
+      recommendedScope: getValue("PWA_HANDOFF_RECOMMENDED_SCOPE:"),
+      trailLines: lines.filter(
+        (line) => line === "ORIGEM: PWA_OCORRENCIA_CRITICA" || line.startsWith("PWA_HANDOFF_"),
+      ),
+      rawJson: handoffJson,
+    };
+  }
+
+  function getPwaHandoffStage(
+    input: {
+      isPwaHandoff: boolean;
+      status: string | null | undefined;
+      linkedFinanceCount: number;
+    },
+  ): "none" | "awaiting_admin" | "approved_financial" | "rejected" {
+    if (!input.isPwaHandoff) return "none";
+    if (input.status === "recusado") return "rejected";
+    if (input.status === "aprovado" && input.linkedFinanceCount > 0) return "approved_financial";
+    return "awaiting_admin";
+  }
+
   function normalizeAttendanceStatus(value: unknown): "agendado" | "em_andamento" | "finalizado" | "cancelado" | null {
     if (typeof value !== "string") return null;
     const normalized = value.toLowerCase().trim();
@@ -1092,6 +1152,19 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
     paymentInstallments.sort((a, b) => a.installmentNumber - b.installmentNumber);
 
+    const handoff = parsePwaHandoffFromNotes(quote.notes);
+    const linkedFinanceCount = (
+      await db
+        .select({ id: transactions.id })
+        .from(transactions)
+        .where(eq(transactions.quoteId, id))
+    ).length;
+    const handoffStage = getPwaHandoffStage({
+      isPwaHandoff: !!handoff,
+      status: quote.status,
+      linkedFinanceCount,
+    });
+
     return {
       quote,
       items,
@@ -1103,6 +1176,16 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           ? {
               ...paymentTerm,
               installmentsList: paymentInstallments,
+            }
+          : null,
+      handoff:
+        handoff && handoff.isPwaHandoff
+          ? {
+              urgency: handoff.urgency,
+              customerContext: handoff.customerContext,
+              recommendedScope: handoff.recommendedScope,
+              stage: handoffStage,
+              linkedFinanceCount,
             }
           : null,
     };
@@ -4154,6 +4237,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         status: quotes.status,
         occurrenceId: quotes.occurrenceId,
         executionScope: quotes.executionScope,
+        notes: quotes.notes,
       })
       .from(quotes)
       .where(eq(quotes.id, id))
@@ -4252,11 +4336,13 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    const handoffTrailLines = parsePwaHandoffFromNotes(existingQuote.notes)?.trailLines || [];
     const notes = [
       resolvedExecutionScope === "interno" ? "RESPONSABILIDADE: ECOHEAT" : "",
       resolvedExecutionScope === "externo" ? "RESPONSABILIDADE: CLIENTE" : "",
       quotePayload.clientNotes?.trim() ? `CLIENTE: ${quotePayload.clientNotes.trim()}` : "",
       quotePayload.internalNotes?.trim() ? `INTERNO: ${quotePayload.internalNotes.trim()}` : "",
+      ...handoffTrailLines,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -4668,33 +4754,39 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       txCountByQuote.set(tx.quoteId, (txCountByQuote.get(tx.quoteId) || 0) + 1);
     }
 
-    const data = rows.map((row) => ({
-      ...(function () {
-        const isPwaHandoff = (row.notes || "").includes("ORIGEM: PWA_OCORRENCIA_CRITICA");
-        const linkedFinanceCount = txCountByQuote.get(row.id) || 0;
-        let handoffStage: "none" | "awaiting_admin" | "approved_financial" | "rejected" = "none";
-        if (isPwaHandoff) {
-          if (row.status === "recusado") {
-            handoffStage = "rejected";
-          } else if (row.status === "aprovado" && linkedFinanceCount > 0) {
-            handoffStage = "approved_financial";
-          } else {
-            handoffStage = "awaiting_admin";
-          }
-        }
-        return { isPwaHandoff, linkedFinanceCount, handoffStage };
-      })(),
-      id: row.id,
-      occurrenceId: row.occurrenceId,
-      description: row.description,
-      executionScope: row.executionScope,
-      status: row.status,
-      issueDate: row.issueDate,
-      validUntil: row.validUntil,
-      grandTotal: row.grandTotal,
-      createdAt: row.createdAt,
-      clientName: row.clientId ? clientMap.get(row.clientId) || "Sem cliente" : "Sem cliente",
-    }));
+    const data = rows.map((row) => {
+      const handoff = parsePwaHandoffFromNotes(row.notes);
+      const linkedFinanceCount = txCountByQuote.get(row.id) || 0;
+      const handoffStage = getPwaHandoffStage({
+        isPwaHandoff: !!handoff,
+        status: row.status,
+        linkedFinanceCount,
+      });
+
+      return {
+        isPwaHandoff: !!handoff,
+        linkedFinanceCount,
+        handoffStage,
+        handoff:
+          handoff && handoff.isPwaHandoff
+            ? {
+                urgency: handoff.urgency,
+                customerContext: handoff.customerContext,
+                recommendedScope: handoff.recommendedScope,
+              }
+            : null,
+        id: row.id,
+        occurrenceId: row.occurrenceId,
+        description: row.description,
+        executionScope: row.executionScope,
+        status: row.status,
+        issueDate: row.issueDate,
+        validUntil: row.validUntil,
+        grandTotal: row.grandTotal,
+        createdAt: row.createdAt,
+        clientName: row.clientId ? clientMap.get(row.clientId) || "Sem cliente" : "Sem cliente",
+      };
+    });
 
     return { success: true, data };
   });

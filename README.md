@@ -57,6 +57,7 @@ Sem o Gotenberg, a API faz fallback para um PDF simples em texto.
 - **Guia UI/UX:** `docs/ui-ux-guide.md`
 - **Auth e Acessos Supabase:** `docs/auth-supabase-acessos.md`
 - **Deploy API em EC2:** `docs/deploy-api-ec2.md`
+- **E2E Fluxo Crítico (Ocorrência -> Orçamento -> Financeiro):** `docs/e2e-fluxo-critico-orcamento-financeiro.md`
 
 ## Fase Atual
 

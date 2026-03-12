@@ -98,9 +98,11 @@ export default function DashboardPage() {
                                                 {data?.criticalOccurrence?.quoteDraft?.pendingAdminReview ? "EM ANÁLISE DO ADMIN" : "GERAR ORÇAMENTO"}
                                             </Button>
                                         ) : (
-                                            <Button variant="secondary" className="aspect-square p-0 w-11 h-11 flex items-center justify-center">
-                                                <span className="material-symbols-outlined text-[18px]">directions</span>
-                                            </Button>
+                                            <div className="inline-flex h-11 items-center rounded border border-border bg-surface-2 px-3 text-[10px] font-mono uppercase tracking-[0.06em] text-text-3">
+                                                {data?.criticalOccurrence?.quoteDraft?.id
+                                                    ? "Orçamento em análise do admin"
+                                                    : "Aguardando ação do admin"}
+                                            </div>
                                         )}
                                     </div>
                                 </div>

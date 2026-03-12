@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api";
 type QuoteStatus = "rascunho" | "enviado" | "aprovado" | "recusado";
 type PaymentMethod = "pix" | "boleto" | "cartao" | "transferencia" | "dinheiro" | "misto";
 type ExecutionScope = "interno" | "externo";
+type HandoffStage = "none" | "awaiting_admin" | "approved_financial" | "rejected";
 
 type OccurrenceSummary = {
     id: string;
@@ -32,6 +33,14 @@ interface ServiceCatalogItem {
     name: string;
     short_description: string;
     sale_price: string;
+}
+
+interface QuoteHandoffSummary {
+    urgency: "baixa" | "media" | "alta" | null;
+    customerContext: string | null;
+    recommendedScope: string | null;
+    stage: HandoffStage;
+    linkedFinanceCount: number;
 }
 
 function fieldClassName() {
@@ -103,6 +112,7 @@ export default function NewQuotePage() {
     const [executionScope, setExecutionScope] = useState<ExecutionScope | "">("");
     const [occurrenceContext, setOccurrenceContext] = useState<OccurrenceSummary | null>(null);
     const [isPwaHandoff, setIsPwaHandoff] = useState(false);
+    const [handoffSummary, setHandoffSummary] = useState<QuoteHandoffSummary | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isLoadingQuote, setIsLoadingQuote] = useState(false);
     const [error, setError] = useState("");
@@ -178,7 +188,9 @@ export default function NewQuotePage() {
                         const { client, internal } = parseNotesByPrefix(quote.notes);
                         setClientNotes(client);
                         setInternalNotes(internal);
-                        setIsPwaHandoff((quote.notes || "").includes("ORIGEM: PWA_OCORRENCIA_CRITICA"));
+                        const hasHandoff = !!response?.data?.handoff || (quote.notes || "").includes("ORIGEM: PWA_OCORRENCIA_CRITICA");
+                        setIsPwaHandoff(hasHandoff);
+                        setHandoffSummary((response?.data?.handoff as QuoteHandoffSummary | null) || null);
 
                         if (quote.issueDate && quote.validUntil) {
                             const start = new Date(quote.issueDate);
@@ -448,6 +460,37 @@ export default function NewQuotePage() {
                         {isPwaHandoff && (
                             <div className="rounded border border-accent-border bg-accent-bg px-3 py-2 text-sm text-accent">
                                 Handoff técnico detectado: orçamento iniciado em campo por ocorrência crítica e encaminhado para análise admin.
+                            </div>
+                        )}
+                        {handoffSummary && (
+                            <div className="rounded border border-border bg-surface-2 p-3">
+                                <p className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-3 mb-2">Trilha do handoff técnico</p>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                                    <div className="rounded border border-border bg-surface px-2 py-1.5">
+                                        <span className="text-text-3">Urgência</span>
+                                        <p className="font-semibold text-text mt-0.5 uppercase">{handoffSummary.urgency || "não informada"}</p>
+                                    </div>
+                                    <div className="rounded border border-border bg-surface px-2 py-1.5">
+                                        <span className="text-text-3">Estágio</span>
+                                        <p className="font-semibold text-text mt-0.5">{handoffSummary.stage}</p>
+                                    </div>
+                                    <div className="rounded border border-border bg-surface px-2 py-1.5">
+                                        <span className="text-text-3">Financeiros vinculados</span>
+                                        <p className="font-semibold text-text mt-0.5">{handoffSummary.linkedFinanceCount}</p>
+                                    </div>
+                                </div>
+                                {handoffSummary.customerContext && (
+                                    <div className="mt-2 rounded border border-border bg-surface px-2 py-1.5 text-xs">
+                                        <span className="text-text-3">Contexto do cliente</span>
+                                        <p className="text-text mt-0.5 whitespace-pre-wrap">{handoffSummary.customerContext}</p>
+                                    </div>
+                                )}
+                                {handoffSummary.recommendedScope && (
+                                    <div className="mt-2 rounded border border-border bg-surface px-2 py-1.5 text-xs">
+                                        <span className="text-text-3">Recomendação técnica</span>
+                                        <p className="text-text mt-0.5 whitespace-pre-wrap">{handoffSummary.recommendedScope}</p>
+                                    </div>
+                                )}
                             </div>
                         )}
 

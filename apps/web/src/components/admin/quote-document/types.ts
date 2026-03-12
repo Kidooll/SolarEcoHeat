@@ -82,4 +82,11 @@ export type QuoteDocumentData = {
   company: QuoteDocumentCompany;
   template: QuoteDocumentTemplate;
   payment: QuoteDocumentPayment;
+  handoff?: {
+    urgency: "baixa" | "media" | "alta" | null;
+    customerContext: string | null;
+    recommendedScope: string | null;
+    stage: "none" | "awaiting_admin" | "approved_financial" | "rejected";
+    linkedFinanceCount: number;
+  } | null;
 };

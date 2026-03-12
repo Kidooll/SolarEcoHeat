@@ -15,6 +15,7 @@ export default function AdminDashboardPage() {
     const router = useRouter();
     const pathname = usePathname();
     const isWebAdminContext = pathname.startsWith("/admin/web");
+    const adminHref = (suffix: string) => `${isWebAdminContext ? "/admin/web" : "/admin"}${suffix}`;
     const { data: dashboardData } = useDashboardData();
     const { stats, loading: loadingStats, error } = useFinanceStats();
     const [activeTechs, setActiveTechs] = useState<any[]>([]);
@@ -127,15 +128,15 @@ export default function AdminDashboardPage() {
                         <h2 className="font-sans text-[10px] font-bold tracking-[0.2em] text-text-3 uppercase">Cadastro Rápido</h2>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
-                        <Link href="/admin/clients/new" className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
+                        <Link href={adminHref("/clients/new")} className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
                             <span className="material-symbols-outlined text-brand text-xl group-hover:scale-110 transition-transform">person_add</span>
                             <span className="text-[9px] font-bold font-mono uppercase tracking-wider text-text-3">Cliente</span>
                         </Link>
-                        <Link href="/admin/systems/new" className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
+                        <Link href={adminHref("/systems/new")} className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
                             <span className="material-symbols-outlined text-brand text-xl group-hover:scale-110 transition-transform">settings_suggest</span>
                             <span className="text-[9px] font-bold font-mono uppercase tracking-wider text-text-3">Sistema</span>
                         </Link>
-                        <Link href="/admin/components/new" className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
+                        <Link href={adminHref("/components/new")} className="bg-surface border border-border p-3 rounded-sm flex flex-col items-center justify-center gap-2 hover:border-brand/50 hover:bg-brand/5 transition-all group">
                             <span className="material-symbols-outlined text-brand text-xl group-hover:scale-110 transition-transform">memory</span>
                             <span className="text-[9px] font-bold font-mono uppercase tracking-wider text-text-3">Componente</span>
                         </Link>
@@ -148,43 +149,43 @@ export default function AdminDashboardPage() {
                         <h2 className="font-sans text-[10px] font-bold tracking-[0.2em] text-text-3 uppercase">Gestão Estratégica</h2>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                        <Link href="/admin/attendances" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/attendances")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">event_note</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Atendimentos</span>
                         </Link>
-                        <Link href="/admin/services" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/services")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">construction</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Serviços</span>
                         </Link>
-                        <Link href="/admin/finance/quotes" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/finance/quotes")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">request_quote</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Orçamentos</span>
                         </Link>
-                        <Link href="/admin/clients" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/clients")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">corporate_fare</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Clientes</span>
                         </Link>
-                        <Link href="/admin/technicians" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/technicians")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">engineering</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Técnicos</span>
                         </Link>
-                        <Link href="/admin/reports" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/reports")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">analytics</span>
                             </div>
                             <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text">Relatórios</span>
                         </Link>
-                        <Link href="/admin/finance" className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
+                        <Link href={adminHref("/finance")} className="bg-surface border border-border p-4 rounded-sm flex flex-col items-center justify-center gap-3 hover:border-brand/50 transition-all group">
                             <div className="size-12 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20 group-hover:scale-110 transition-transform">
                                 <span className="material-symbols-outlined text-brand">account_balance</span>
                             </div>
@@ -298,10 +299,10 @@ export default function AdminDashboardPage() {
                                                 onClick={() => {
                                                     const quoteDraftId = dashboardData?.criticalOccurrence?.quoteDraft?.id;
                                                     if (quoteDraftId) {
-                                                        router.push(`/admin/finance/quote/${quoteDraftId}/edit`);
+                                                        router.push(adminHref(`/finance/quote/${quoteDraftId}/edit`));
                                                         return;
                                                     }
-                                                    router.push(`/admin/finance/quote/new?occurrenceId=${dashboardData.criticalOccurrence.id}`);
+                                                    router.push(adminHref(`/finance/quote/new?occurrenceId=${dashboardData.criticalOccurrence.id}`));
                                                 }}
                                             >
                                                 {dashboardData?.criticalOccurrence?.quoteDraft?.pendingAdminReview
