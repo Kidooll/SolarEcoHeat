@@ -444,6 +444,8 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
     // Dashboard Financeiro: Cálculos feitos no Servidor
     fastify.get("/dashboard", async (request, reply) => {
         try {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
             const stats = {
                 toReceive: 0,
                 toPay: 0,
@@ -457,27 +459,40 @@ export const financeRoutes: FastifyPluginAsync = async (fastify, options) => {
                 overdueCount: 0,
             };
 
-            const list = await loadEnrichedTransactions();
+            const rows = await db
+                .select({
+                    type: transactions.type,
+                    status: transactions.status,
+                    amount: transactions.amount,
+                    dueDate: transactions.dueDate,
+                })
+                .from(transactions);
 
-            list.forEach((row) => {
-                if (row.type === "income") {
-                    if (row.derivedStatus === "paid") {
-                        stats.received += row.amount;
-                    } else if (row.derivedStatus === "pending" || row.derivedStatus === "overdue") {
-                        stats.toReceive += row.amount;
+            rows.forEach((row) => {
+                const type = row.type === "expense" ? "expense" : "income";
+                const amount = toNumber(row.amount);
+                const dueDate = new Date(row.dueDate);
+                const isOverdue = row.status === "pending" && dueDate < today;
+                const derivedStatus = row.status === "paid" ? "paid" : row.status === "cancelled" ? "cancelled" : isOverdue ? "overdue" : "pending";
+
+                if (type === "income") {
+                    if (derivedStatus === "paid") {
+                        stats.received += amount;
+                    } else if (derivedStatus === "pending" || derivedStatus === "overdue") {
+                        stats.toReceive += amount;
                         stats.openIncomeCount += 1;
                     }
-                } else if (row.type === "expense") {
-                    if (row.derivedStatus === "paid") {
-                        stats.paid += row.amount;
-                    } else if (row.derivedStatus === "pending" || row.derivedStatus === "overdue") {
-                        stats.toPay += row.amount;
+                } else {
+                    if (derivedStatus === "paid") {
+                        stats.paid += amount;
+                    } else if (derivedStatus === "pending" || derivedStatus === "overdue") {
+                        stats.toPay += amount;
                         stats.openExpenseCount += 1;
                     }
                 }
 
-                if (row.derivedStatus === "overdue") {
-                    stats.overdue += row.amount;
+                if (derivedStatus === "overdue") {
+                    stats.overdue += amount;
                     stats.overdueCount += 1;
                 }
             });

@@ -154,6 +154,9 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
         const scopedUnitIds = await getScopedUnitIds(request.user, role);
         if (scopedUnitIds && scopedUnitIds.length === 0) {
           return reply.send({
@@ -188,6 +191,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                   technicianId: attendances.technicianId,
                 })
                 .from(attendances)
+                .where(sql`${attendances.createdAt} >= ${todayStart}`)
             : await db
                 .select({
                   id: attendances.id,
@@ -199,7 +203,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                   technicianId: attendances.technicianId,
                 })
                 .from(attendances)
-                .where(eq(attendances.technicianId, request.user.id));
+                .where(and(eq(attendances.technicianId, request.user.id), sql`${attendances.createdAt} >= ${todayStart}`));
 
         const technicianAttendances = scopedUnitIds
           ? baseAttendances.filter((item) => scopedUnitIds.includes(item.unitId))
@@ -227,10 +231,8 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           success: allSystems.filter((item) => normalizeSeverity(item.stateDerived) === "OK").length,
         };
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
         const todayAttendances = technicianAttendances
-          .filter((item) => item.createdAt && new Date(item.createdAt) >= today)
+          .filter((item) => item.createdAt && new Date(item.createdAt) >= todayStart)
           .sort((a, b) => {
             const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
             const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
