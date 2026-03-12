@@ -496,7 +496,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     <style>
       @page {
         size: A4;
-        margin: 14mm 12mm 18mm;
+        margin: 0;
       }
       * {
         box-sizing: border-box;
@@ -504,15 +504,20 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       html, body {
         margin: 0;
         padding: 0;
+        width: 100%;
         font-family: Arial, sans-serif;
         color: #1f2937;
+        background: #ffffff;
       }
       body {
         font-size: 12px;
         line-height: 1.45;
       }
       .sheet {
-        min-height: 100%;
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0 auto;
+        background: #ffffff;
       }
       .header {
         background: ${htmlEscape(template.accentColor)};
@@ -5379,6 +5384,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           form.append("marginLeft", "0");
           form.append("marginRight", "0");
           form.append("printBackground", "true");
+          form.append("preferCssPageSize", "true");
 
           const response = await fetch(`${gotenbergUrl.replace(/\/$/, "")}/forms/chromium/convert/html`, {
             method: "POST",
