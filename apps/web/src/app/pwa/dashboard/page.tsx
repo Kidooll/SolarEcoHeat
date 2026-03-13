@@ -6,6 +6,7 @@ import { Header } from "@/components/layout/header";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { MetricCard } from "@/components/ui/metric-card";
 import { Button } from "@/components/ui/button";
+import { InstallAppBanner } from "@/components/pwa/install-app-banner";
 import { useDashboardData } from "@/hooks/use-dashboard-data";
 
 export default function DashboardPage() {
@@ -34,6 +35,8 @@ export default function DashboardPage() {
             />
 
             <main className="flex-1 px-4 py-5 flex flex-col gap-6 pb-24">
+                <InstallAppBanner />
+
                 {/* Banner de Resumo do Dia */}
                 <section className="grid grid-cols-3 gap-2">
                     <MetricCard label="Total" value={loading ? "..." : data?.stats?.total || 0} />

@@ -2,21 +2,26 @@
     "name": "EcoHeat",
     "short_name": "EcoHeat",
     "description": "App para gestão de manutenções de técnicos de campo",
-    "start_url": "/",
+    "id": "/pwa",
+    "start_url": "/pwa/dashboard",
+    "scope": "/",
     "display": "standalone",
+    "display_override": ["standalone", "minimal-ui", "browser"],
     "background_color": "#0e0f11",
     "theme_color": "#0e0f11",
     "orientation": "portrait",
     "icons": [
         {
-            "src": "/icon-192x192.svg",
+            "src": "/icon-192x192.png",
             "sizes": "192x192",
-            "type": "image/svg+xml"
+            "type": "image/png",
+            "purpose": "any maskable"
         },
         {
-            "src": "/icon-512x512.svg",
+            "src": "/icon-512x512.png",
             "sizes": "512x512",
-            "type": "image/svg+xml"
+            "type": "image/png",
+            "purpose": "any maskable"
         }
     ]
 }

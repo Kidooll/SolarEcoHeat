@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
+import { apiFetch } from "@/lib/api";
 
 interface Stats {
     toReceive: number;
@@ -19,31 +19,11 @@ export function useFinanceStats() {
     const fetchStats = async () => {
         try {
             setLoading(true);
-            const supabase = createClient();
-            const { data: { session } } = await supabase.auth.getSession();
-
-            if (!session) {
-                setError("Não autenticado");
-                setLoading(false);
-                return;
-            }
-
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
-            const response = await fetch(`${apiUrl}/api/finance/dashboard`, {
-                headers: {
-                    Authorization: `Bearer ${session.access_token}`
-                }
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || "Erro ao buscar estatísticas");
-            }
-
-            const data = await response.json();
+            const data = await apiFetch<{ stats: Stats }>("/api/finance/dashboard");
             setStats(data.stats);
-        } catch (err: any) {
-            setError(err.message);
+            setError(null);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Erro ao buscar estatísticas");
         } finally {
             setLoading(false);
         }
