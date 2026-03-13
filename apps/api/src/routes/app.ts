@@ -15,7 +15,7 @@ import {
   systems,
   technicalUnits,
 } from "@solarecoheat/db";
-import { getUserRole } from "../lib/auth";
+import { getUserRole, sanitizeUuid } from "../lib/auth";
 import {
   dispatchCriticalOccurrenceAlert,
   isCriticalAlertQueueEnabled,
@@ -60,7 +60,7 @@ function toTimelineType(value: string | null | undefined): "Preventiva" | "Corre
 
 function getClientIdFromUser(user: any) {
   const raw = user?.app_metadata?.client_id ?? user?.user_metadata?.client_id ?? null;
-  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+  return sanitizeUuid(raw);
 }
 
 function getActorUserId(request: any) {
@@ -317,7 +317,10 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           },
         });
       } catch (error) {
-        fastify.log.error({ error }, "Falha ao carregar dados do dashboard app");
+        fastify.log.error(
+          { error, userId: request.user?.id, role, route: "/app/dashboard" },
+          "Falha ao carregar dados do dashboard app",
+        );
         return reply.code(500).send({ success: false, error: "Erro ao carregar dashboard." });
       }
     },

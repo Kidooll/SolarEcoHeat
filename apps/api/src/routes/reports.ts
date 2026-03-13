@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "crypto";
 import { db, sql } from "@solarecoheat/db";
-import { getUserRole } from "../lib/auth";
+import { getUserRole, sanitizeUuid } from "../lib/auth";
 
 type ReportType = "attendance" | "system" | "period" | "client";
 type JobStatus = "queued" | "processing" | "done" | "failed";
@@ -19,7 +19,7 @@ interface ReportJobRow {
 
 function getClientIdFromUser(user: any) {
   const raw = user?.app_metadata?.client_id ?? user?.user_metadata?.client_id ?? null;
-  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+  return sanitizeUuid(raw);
 }
 
 async function getClientIdWithProfileFallback(user: any) {

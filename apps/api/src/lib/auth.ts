@@ -14,6 +14,19 @@ export function getUserRole(user: any): AppRole {
   return normalizeRole(claimedRole);
 }
 
+export function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+export function sanitizeUuid(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return isUuid(normalized) ? normalized : null;
+}
+
 export function ensureAdmin(user: any): boolean {
   return getUserRole(user) === "admin";
 }

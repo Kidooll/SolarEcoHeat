@@ -12,7 +12,7 @@ import {
   technicalUnits,
 } from "@solarecoheat/db";
 import { syncPushSchema } from "@solarecoheat/validators";
-import { getUserRole } from "../lib/auth";
+import { getUserRole, isUuid, sanitizeUuid } from "../lib/auth";
 
 const CURRENT_SYNC_SCHEMA_VERSION = 1;
 
@@ -62,16 +62,9 @@ function deriveSystemFinalState(checklist: Record<string, unknown>) {
   return "OK";
 }
 
-function isUuid(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  );
-}
-
 function getClientIdFromUser(user: any) {
   const raw = user?.app_metadata?.client_id ?? user?.user_metadata?.client_id ?? null;
-  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+  return sanitizeUuid(raw);
 }
 
 function isChecklistStatus(value: unknown): value is "OK" | "ATN" | "CRT" {
