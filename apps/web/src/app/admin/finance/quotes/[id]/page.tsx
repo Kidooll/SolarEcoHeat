@@ -62,7 +62,7 @@ export default function QuoteDetailPage() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const handlePdf = async () => {
+  const handlePdf = async (engine: "simple" | "gotenberg" = "simple") => {
     if (!id) return;
 
     try {
@@ -75,7 +75,8 @@ export default function QuoteDetailPage() {
         throw new Error("Sessão inválida.");
       }
 
-      const response = await fetch(`${getApiBaseUrlPublic()}/api/admin/quotes/${id}/pdf`, {
+      const query = engine === "gotenberg" ? "?renderEngine=gotenberg" : "";
+      const response = await fetch(`${getApiBaseUrlPublic()}/api/admin/quotes/${id}/pdf${query}`, {
         headers: {
           Authorization: `Bearer ${session.access_token}`,
         },
@@ -202,8 +203,11 @@ export default function QuoteDetailPage() {
               <button type="button" onClick={handleWhatsApp} className="inline-flex h-10 items-center rounded border border-brand-border bg-brand-bg px-4 text-sm font-semibold text-brand">
                 WhatsApp
               </button>
-              <button type="button" onClick={handlePdf} className="inline-flex h-10 items-center rounded border border-crit-border bg-crit-bg px-4 text-sm font-semibold text-crit">
-                PDF
+              <button type="button" onClick={() => handlePdf("simple")} className="inline-flex h-10 items-center rounded border border-crit-border bg-crit-bg px-4 text-sm font-semibold text-crit">
+                PDF Rápido
+              </button>
+              <button type="button" onClick={() => handlePdf("gotenberg")} className="inline-flex h-10 items-center rounded border border-crit-border bg-crit-bg px-4 text-sm font-semibold text-crit">
+                PDF Completo
               </button>
               <button
                 type="button"

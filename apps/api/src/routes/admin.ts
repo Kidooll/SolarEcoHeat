@@ -35,6 +35,14 @@ import {
   retryCriticalAlertJob,
 } from "../lib/critical-alert-queue";
 
+let activeGotenbergRenders = 0;
+
+function getGotenbergMaxConcurrent() {
+  const raw = Number(process.env.GOTENBERG_MAX_CONCURRENT || 1);
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.floor(raw);
+}
+
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   const ALLOWED_SYSTEM_TYPES = new Set([
     "solar",
@@ -5290,6 +5298,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/quotes/:id/pdf", async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
+      const query = (request.query || {}) as {
+        renderEngine?: string;
+        useGotenberg?: string;
+        forceGotenberg?: string;
+      };
       const document = await getQuoteDocumentData(id);
 
       if (!document) {
@@ -5368,8 +5381,25 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       ];
 
       const gotenbergUrl = process.env.GOTENBERG_URL?.trim();
+      const gotenbergMode = (process.env.GOTENBERG_MODE || "on_demand").trim().toLowerCase();
+      const requestedEngine = (query.renderEngine || "").trim().toLowerCase();
+      const requestWantsGotenberg =
+        requestedEngine === "gotenberg" ||
+        query.useGotenberg === "1" ||
+        query.forceGotenberg === "1";
+      const shouldUseGotenberg =
+        !!gotenbergUrl &&
+        (gotenbergMode === "always" || (gotenbergMode !== "disabled" && requestWantsGotenberg));
 
-      if (gotenbergUrl) {
+      if (shouldUseGotenberg) {
+        const maxConcurrent = getGotenbergMaxConcurrent();
+        if (activeGotenbergRenders >= maxConcurrent) {
+          fastify.log.warn(
+            { maxConcurrent, active: activeGotenbergRenders, quoteId: quote.id },
+            "Gotenberg em capacidade máxima; usando fallback PDF simples",
+          );
+        } else {
+          activeGotenbergRenders += 1;
         try {
           const form = new FormData();
           form.append(
@@ -5396,6 +5426,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             const pdf = Buffer.from(arrayBuffer);
             reply.header("Content-Type", "application/pdf");
             reply.header("Cache-Control", "no-store");
+            reply.header("X-PDF-Engine", "gotenberg");
             reply.header(
               "Content-Disposition",
               `attachment; filename=orcamento-${quote.id.slice(0, 8)}.pdf`,
@@ -5409,12 +5440,16 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           );
         } catch (error) {
           fastify.log.warn({ error }, "Falha ao gerar PDF do orçamento via Gotenberg");
+        } finally {
+          activeGotenbergRenders = Math.max(0, activeGotenbergRenders - 1);
+        }
         }
       }
 
       const pdf = makeSimplePdf(lines);
       reply.header("Content-Type", "application/pdf");
       reply.header("Cache-Control", "no-store");
+      reply.header("X-PDF-Engine", "simple");
       reply.header(
         "Content-Disposition",
         `attachment; filename=orcamento-${quote.id.slice(0, 8)}.pdf`,

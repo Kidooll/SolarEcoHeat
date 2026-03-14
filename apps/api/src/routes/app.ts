@@ -68,6 +68,17 @@ function getActorUserId(request: any) {
   return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
 }
 
+function ensureClientBoundContext(request: any, reply: any, role: ReturnType<typeof getUserRole>) {
+  if (role !== "client") return true;
+  const clientId = getClientIdFromUser(request.user);
+  if (clientId) return true;
+  reply.code(403).send({
+    success: false,
+    error: "Perfil cliente sem client_id válido. Atualize o vínculo para acessar estes dados.",
+  });
+  return false;
+}
+
 function componentChecklistStatus(value: unknown): "OK" | "ATN" | "CRT" | null {
   if (!value || typeof value !== "object") return null;
   const status = (value as any).status;
@@ -152,6 +163,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       if (role === "unknown") {
         return reply.code(403).send({ success: false, error: "Perfil sem acesso ao app." });
       }
+      if (!ensureClientBoundContext(request, reply, role)) return;
 
       try {
         const todayStart = new Date();
@@ -335,6 +347,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       if (role === "unknown") {
         return reply.code(403).send({ success: false, error: "Perfil sem acesso ao app." });
       }
+      if (!ensureClientBoundContext(request, reply, role)) return;
 
       try {
         const scopedUnitIds = await getScopedUnitIds(request.user, role);
@@ -399,6 +412,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       if (role === "unknown") {
         return reply.code(403).send({ success: false, error: "Perfil sem acesso ao app." });
       }
+      if (!ensureClientBoundContext(request, reply, role)) return;
 
       const { id } = request.params as { id: string };
 
@@ -1431,6 +1445,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
       if (role === "unknown") {
         return reply.code(403).send({ success: false, error: "Perfil sem acesso ao app." });
       }
+      if (!ensureClientBoundContext(request, reply, role)) return;
 
       const { id } = request.params as { id: string };
 

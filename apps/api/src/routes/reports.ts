@@ -113,6 +113,14 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     if (role === "unknown") {
       return reply.status(403).send({ error: "Acesso negado" });
     }
+    if (role === "client") {
+      const clientId = await getClientIdWithProfileFallback(request.user);
+      if (!clientId) {
+        return reply
+          .status(403)
+          .send({ error: "Perfil cliente sem vínculo de client_id. Atualize o perfil para liberar relatórios." });
+      }
+    }
   });
 
   fastify.get("/:type", async (request, reply) => {
@@ -126,15 +134,6 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     if (role === "client" && type !== "client") {
       return reply.status(403).send({ error: "Perfil cliente pode gerar apenas relatório do cliente." });
     }
-    if (role === "client") {
-      const clientId = await getClientIdWithProfileFallback(request.user);
-      if (!clientId) {
-        return reply
-          .status(403)
-          .send({ error: "Perfil cliente sem vínculo de client_id. Atualize o perfil para liberar relatórios." });
-      }
-    }
-
     const jobId = randomUUID();
     const userId = request.user?.id;
 
@@ -174,6 +173,9 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(403).send({ error: "Acesso negado ao job solicitado." });
       }
     }
+    if (getUserRole(request.user) === "client" && job.type !== "client") {
+      return reply.status(403).send({ error: "Perfil cliente não pode acessar esse tipo de relatório." });
+    }
 
     const baseUrl = process.env.API_PUBLIC_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
     return {
@@ -211,6 +213,9 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
       if (role !== "admin") {
         return reply.status(403).send({ error: "Acesso negado ao relatório solicitado." });
       }
+    }
+    if (getUserRole(request.user) === "client" && job.type !== "client") {
+      return reply.status(403).send({ error: "Perfil cliente não pode baixar esse tipo de relatório." });
     }
 
     const pdf = makePdfBuffer(job);
