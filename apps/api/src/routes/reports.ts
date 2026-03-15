@@ -81,6 +81,9 @@ async function ensureReportJobsTable() {
 
 export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
   await ensureReportJobsTable();
+  const maxConcurrentReports = Math.max(1, Math.min(4, Number(process.env.REPORTS_MAX_CONCURRENT || 1)));
+  let activeReportJobs = 0;
+  const reportQueue: string[] = [];
 
   const processJob = async (jobId: string) => {
     try {
@@ -104,6 +107,27 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
         where id = ${jobId}::uuid
       `);
     }
+  };
+
+  const pumpReportQueue = () => {
+    while (activeReportJobs < maxConcurrentReports && reportQueue.length > 0) {
+      const nextJobId = reportQueue.shift();
+      if (!nextJobId) break;
+      activeReportJobs += 1;
+      processJob(nextJobId)
+        .catch((error) => {
+          fastify.log.error({ error, jobId: nextJobId }, "Falha ao processar job de relatório");
+        })
+        .finally(() => {
+          activeReportJobs = Math.max(0, activeReportJobs - 1);
+          pumpReportQueue();
+        });
+    }
+  };
+
+  const enqueueReportJob = (jobId: string) => {
+    reportQueue.push(jobId);
+    pumpReportQueue();
   };
 
   fastify.addHook("preHandler", async (request, reply) => {
@@ -142,13 +166,17 @@ export const reportsRoutes: FastifyPluginAsync = async (fastify) => {
       values (${jobId}::uuid, ${type}, 'queued', ${userId}::uuid)
     `);
 
-    setTimeout(() => {
-      processJob(jobId).catch((error) => {
-        fastify.log.error({ error, jobId }, "Falha ao processar job de relatório");
-      });
-    }, 0);
+    enqueueReportJob(jobId);
 
-    return { success: true, jobId };
+    return {
+      success: true,
+      jobId,
+      queue: {
+        maxConcurrent: maxConcurrentReports,
+        active: activeReportJobs,
+        pending: reportQueue.length,
+      },
+    };
   });
 
   fastify.get("/status/:jobId", async (request, reply) => {

@@ -1,6 +1,7 @@
 import { apiFetch } from "@/lib/api";
 import {
     getPendingOperations,
+    getQueuedOperations,
     markAsSynced,
     moveToFailedOperations,
     getFailedOperations,
@@ -11,6 +12,12 @@ import {
 
 const MAX_RETRY_ATTEMPTS = 3;
 const SYNC_SCHEMA_VERSION = 1;
+const SYNC_TAG = "ecoheat-sync";
+const RETRY_BASE_DELAY_MS = 5_000;
+const RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
+
+let syncInFlight = false;
+let syncMessageListenerBound = false;
 
 type SyncPushResult = {
     localId?: number;
@@ -50,7 +57,13 @@ async function promoteApprovedConflictRetries() {
 }
 
 export async function pushPendingData() {
-    if (!navigator.onLine) return;
+    if (syncInFlight) return;
+    if (!navigator.onLine) {
+        await scheduleBackgroundSync("offline");
+        return;
+    }
+
+    syncInFlight = true;
     try {
         await promoteApprovedConflictRetries();
     } catch (error) {
@@ -58,7 +71,10 @@ export async function pushPendingData() {
     }
 
     const pending = await getPendingOperations();
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+        syncInFlight = false;
+        return;
+    }
 
     console.log(`[SyncEngine] Sincronizando ${pending.length} operações...`);
 
@@ -125,15 +141,24 @@ export async function pushPendingData() {
                 continue;
             }
 
+            const retryDelayMs = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * Math.pow(2, attempts - 1));
             await updateSyncOperation(localId, {
                 attempts,
                 lastError: reason,
+                nextRetryAt: Date.now() + retryDelayMs,
             });
         }
 
         await pullServerDelta();
     } catch (error) {
         console.error("[SyncEngine] Erro de rede na sincronização:", error);
+        await scheduleBackgroundSync("network_error");
+    } finally {
+        syncInFlight = false;
+        const queued = await getQueuedOperations();
+        if (queued.length > 0) {
+            await scheduleBackgroundSync("queue_not_empty");
+        }
     }
 }
 
@@ -173,8 +198,42 @@ export async function pullServerDelta() {
     }
 }
 
+export async function scheduleBackgroundSync(reason: string = "manual") {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return false;
+
+    try {
+        const registration = await navigator.serviceWorker.ready;
+        const syncManager = (registration as ServiceWorkerRegistration & { sync?: { register: (tag: string) => Promise<void> } }).sync;
+        if (!syncManager) return false;
+        await syncManager.register(SYNC_TAG);
+        console.log(`[SyncEngine] Background Sync agendado (${reason}).`);
+        return true;
+    } catch (error) {
+        console.warn("[SyncEngine] Falha ao registrar Background Sync:", error);
+        return false;
+    }
+}
+
+function bindServiceWorkerSyncMessages() {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    if (syncMessageListenerBound) return;
+
+    navigator.serviceWorker.addEventListener("message", (event) => {
+        const message = event.data;
+        if (!message || typeof message !== "object") return;
+        if (message.type !== "TRIGGER_SYNC") return;
+        pushPendingData().catch((error) => {
+            console.error("[SyncEngine] Falha ao processar TRIGGER_SYNC:", error);
+        });
+    });
+
+    syncMessageListenerBound = true;
+}
+
 // Ouvinte de conexão para disparar sync automático
 if (typeof window !== "undefined") {
+    bindServiceWorkerSyncMessages();
+
     window.addEventListener("online", () => {
         console.log("[SyncEngine] Rede detectada! Iniciando sincronização...");
         pushPendingData();
@@ -184,6 +243,8 @@ if (typeof window !== "undefined") {
     setInterval(() => {
         if (navigator.onLine) {
             pushPendingData();
+        } else {
+            scheduleBackgroundSync("periodic_offline");
         }
     }, 5 * 60 * 1000);
 }

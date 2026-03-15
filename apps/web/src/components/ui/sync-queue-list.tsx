@@ -7,6 +7,8 @@ interface SyncQueueListProps {
     errors: any[];
     isSyncing: boolean;
     progress: number;
+    scheduledRetryOps?: number;
+    nextRetryAt?: number | null;
     onRetry: (id: number) => void;
     onDelete: (id: number) => void;
 }
@@ -16,9 +18,13 @@ export function SyncQueueList({
     errors,
     isSyncing,
     progress,
+    scheduledRetryOps = 0,
+    nextRetryAt = null,
     onRetry,
     onDelete
 }: SyncQueueListProps) {
+    const nextRetryLabel = nextRetryAt ? new Date(nextRetryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+
     return (
         <div className="flex flex-col gap-6">
             {/* Seção de Operações Pendentes */}
@@ -45,6 +51,11 @@ export function SyncQueueList({
                     <p className="text-sm text-text-2">
                         <span className="font-bold text-text">{pendingOps.length}</span> operações aguardando upload
                     </p>
+                    {scheduledRetryOps > 0 && (
+                        <p className="mt-1 text-xs text-text-3">
+                            {scheduledRetryOps} em retry agendado{nextRetryLabel ? ` (próx. tentativa ${nextRetryLabel})` : ""}
+                        </p>
+                    )}
                 </div>
             </section>
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "@/lib/api";
 import {
     getPendingOperations,
+    getQueuedOperations,
     removePendingOperation,
     getFailedOperations,
     retryFailedOperation,
@@ -25,10 +26,20 @@ export function useSyncManager() {
     const [isOnline, setIsOnline] = useState(true);
     const [isSyncing, setIsSyncing] = useState(false);
     const [progress, setProgress] = useState(0);
+    const [scheduledRetryOps, setScheduledRetryOps] = useState(0);
+    const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
 
     const refreshData = useCallback(async () => {
         const ops = await getPendingOperations();
         setPendingOps(ops.filter(op => !op.synced));
+        const queuedOps = await getQueuedOperations();
+        const now = Date.now();
+        const scheduled = queuedOps.filter((op) => !op.synced && !!op.nextRetryAt && op.nextRetryAt > now);
+        setScheduledRetryOps(scheduled.length);
+        const nearest = scheduled
+            .map((op) => op.nextRetryAt as number)
+            .sort((a, b) => a - b)[0];
+        setNextRetryAt(Number.isFinite(nearest) ? nearest : null);
         const failed = await getFailedOperations();
         const conflictIds = Array.from(
             new Set(
@@ -146,6 +157,8 @@ export function useSyncManager() {
         isOnline,
         isSyncing,
         progress,
+        scheduledRetryOps,
+        nextRetryAt,
         triggerSync,
         retryOperation,
         deleteOperation,

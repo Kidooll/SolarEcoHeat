@@ -77,21 +77,50 @@ Status: [x] Concluido.
 
 1. Criar limites de concorrencia para rotas pesadas:
 - PDF, relatorios, consultas grandes.
+Status: [x] Concluido (Mar/2026).
+Implementado:
+- PDF com limite de concorrencia por processo via `GOTENBERG_MAX_CONCURRENT`.
+- Processamento de relatorios com fila interna e limite configuravel via `REPORTS_MAX_CONCURRENT` (default `1`, max `4`) para proteger CPU/RAM da `t2.micro`.
 
 2. Adicionar observabilidade minima:
 - monitorar CPU/RAM/disco/swap,
 - contador de requests PDF por engine,
 - alertas basicos de indisponibilidade.
+Status: [x] Concluido (Mar/2026).
+Implementado:
+- Endpoint `GET /api/admin/ops/health` com status global (`ok/degraded/down`) e checks de:
+  - API (uptime, memoria, CPU/load),
+  - Banco (probe `select 1` com latencia),
+  - Gotenberg (`/health`, modo `on_demand/always/disabled`),
+  - Fila de alertas criticos (estado da queue + SLA).
+- Contadores em memoria para:
+  - dashboard degradado por erro,
+  - geracao de PDF por engine (`simple` vs `gotenberg`),
+  - fallback/erros de Gotenberg.
 
 3. Revisar retries/fila:
 - Redis externo ja reduz carga local.
 - limitar throughput de jobs criticos em horarios de pico.
+Status: [x] Concluido (Mar/2026).
+Implementado:
+- Fila de alertas criticos com tuning por env:
+  - `CRITICAL_ALERT_WORKER_CONCURRENCY` (default `1`),
+  - `CRITICAL_ALERT_WORKER_RATE_LIMIT_MAX` + `CRITICAL_ALERT_WORKER_RATE_LIMIT_DURATION_MS`,
+  - `CRITICAL_ALERT_QUEUE_ATTEMPTS` + `CRITICAL_ALERT_QUEUE_BACKOFF_MS`,
+  - `CRITICAL_ALERT_QUEUE_REMOVE_ON_COMPLETE` + `CRITICAL_ALERT_QUEUE_REMOVE_ON_FAIL`.
+- Status operacional da fila agora retorna essas configuracoes no endpoint `GET /api/admin/ops/critical-alerts/status`.
 
 ### P2 (evolucao de produto sem pressao de infraestrutura)
 
 1. PWA offline-first robusto:
 - mover sync para Workbox Background Sync quando viavel.
 - melhorar UX de conflito e fila pendente.
+Status: [~] Em andamento (Fase 1 concluida - Mar/2026).
+Implementado na Fase 1:
+- Retry exponencial no sync local com agendamento por operacao (`nextRetryAt`) antes de mover para DLQ.
+- Registro de Background Sync (`ecoheat-sync`) no app para reprocessar fila quando houver conectividade.
+- Service Worker publica evento `TRIGGER_SYNC` para clientes ativos no evento `sync`.
+- Tela `/pwa/sync` agora distingue pendencias prontas para envio vs pendencias em retry agendado.
 
 2. Politica de soft-delete:
 - padronizar `status/is_active` onde faltar.

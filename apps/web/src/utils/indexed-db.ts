@@ -12,6 +12,7 @@ export interface SyncOperation {
     synced: boolean;
     attempts?: number;
     lastError?: string | null;
+    nextRetryAt?: number | null;
 }
 
 export interface FailedSyncOperation {
@@ -66,11 +67,23 @@ export async function addToSyncQueue(operation: Omit<SyncOperation, "id" | "sync
         ...operation,
         timestamp: Date.now(),
         synced: false,
+        nextRetryAt: null,
     };
     return db.add("sync_queue", syncItem);
 }
 
 export async function getPendingOperations() {
+    const db = await initDB();
+    const now = Date.now();
+    const all = (await db.getAll("sync_queue")) as SyncOperation[];
+    return all.filter((item) => {
+        if (item.synced) return false;
+        if (!item.nextRetryAt) return true;
+        return item.nextRetryAt <= now;
+    });
+}
+
+export async function getQueuedOperations() {
     const db = await initDB();
     const all = (await db.getAll("sync_queue")) as SyncOperation[];
     return all.filter((item) => !item.synced);
@@ -139,6 +152,7 @@ export async function retryFailedOperation(id: number) {
             synced: false,
             attempts: 0,
             lastError: null,
+            nextRetryAt: null,
         } satisfies SyncOperation);
         await failedStore.delete(id);
     }

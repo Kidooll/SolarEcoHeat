@@ -1,5 +1,7 @@
 import { FastifyPluginAsync } from "fastify";
 import { createHash, randomBytes } from "node:crypto";
+import { readFile, statfs } from "node:fs/promises";
+import os from "node:os";
 import {
   accessInvites,
   attendances,
@@ -34,6 +36,12 @@ import {
   listCriticalAlertFailedJobs,
   retryCriticalAlertJob,
 } from "../lib/critical-alert-queue";
+import {
+  getOpsCountersSnapshot,
+  recordPdfGenerated,
+  recordPdfHardFailure,
+  recordPdfRequest,
+} from "../lib/ops-observability";
 
 let activeGotenbergRenders = 0;
 
@@ -41,6 +49,127 @@ function getGotenbergMaxConcurrent() {
   const raw = Number(process.env.GOTENBERG_MAX_CONCURRENT || 1);
   if (!Number.isFinite(raw) || raw <= 0) return 1;
   return Math.floor(raw);
+}
+
+type OpsProbe =
+  | { status: "ok"; latencyMs: number; details?: Record<string, unknown> }
+  | { status: "degraded" | "down"; latencyMs: number; error: string; details?: Record<string, unknown> }
+  | { status: "disabled"; details?: Record<string, unknown> };
+
+async function probeDatabase(): Promise<OpsProbe> {
+  const startedAt = Date.now();
+  try {
+    await db.execute(sql`select 1`);
+    return { status: "ok", latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    return {
+      status: "down",
+      latencyMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function probeGotenberg() {
+  const gotenbergUrl = process.env.GOTENBERG_URL?.trim();
+  const gotenbergMode = (process.env.GOTENBERG_MODE || "on_demand").trim().toLowerCase();
+  if (!gotenbergUrl || gotenbergMode === "disabled") {
+    return {
+      status: "disabled" as const,
+      mode: gotenbergMode,
+      urlConfigured: !!gotenbergUrl,
+    };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(`${gotenbergUrl.replace(/\/$/, "")}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(2000),
+    });
+
+    if (!response.ok) {
+      return {
+        status: "degraded" as const,
+        mode: gotenbergMode,
+        urlConfigured: true,
+        latencyMs: Date.now() - startedAt,
+        statusCode: response.status,
+      };
+    }
+
+    return {
+      status: "ok" as const,
+      mode: gotenbergMode,
+      urlConfigured: true,
+      latencyMs: Date.now() - startedAt,
+      statusCode: response.status,
+    };
+  } catch (error) {
+    return {
+      status: "degraded" as const,
+      mode: gotenbergMode,
+      urlConfigured: true,
+      latencyMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function getHostResourceSnapshot() {
+  const totalMemBytes = os.totalmem();
+  const freeMemBytes = os.freemem();
+  const usedMemBytes = Math.max(0, totalMemBytes - freeMemBytes);
+
+  let swapTotalBytes = 0;
+  let swapFreeBytes = 0;
+  try {
+    const meminfo = await readFile("/proc/meminfo", "utf8");
+    const swapTotalMatch = meminfo.match(/^SwapTotal:\s+(\d+)\s+kB$/m);
+    const swapFreeMatch = meminfo.match(/^SwapFree:\s+(\d+)\s+kB$/m);
+    if (swapTotalMatch) swapTotalBytes = Number(swapTotalMatch[1]) * 1024;
+    if (swapFreeMatch) swapFreeBytes = Number(swapFreeMatch[1]) * 1024;
+  } catch {
+    swapTotalBytes = 0;
+    swapFreeBytes = 0;
+  }
+
+  let diskTotalBytes = 0;
+  let diskAvailableBytes = 0;
+  try {
+    const fsStats = await statfs("/");
+    diskTotalBytes = Number(fsStats.blocks) * Number(fsStats.bsize);
+    diskAvailableBytes = Number(fsStats.bavail) * Number(fsStats.bsize);
+  } catch {
+    diskTotalBytes = 0;
+    diskAvailableBytes = 0;
+  }
+
+  return {
+    memory: {
+      totalMb: Number((totalMemBytes / 1024 / 1024).toFixed(2)),
+      usedMb: Number((usedMemBytes / 1024 / 1024).toFixed(2)),
+      freeMb: Number((freeMemBytes / 1024 / 1024).toFixed(2)),
+      usageRatio: totalMemBytes > 0 ? Number((usedMemBytes / totalMemBytes).toFixed(4)) : 0,
+    },
+    swap: {
+      totalMb: Number((swapTotalBytes / 1024 / 1024).toFixed(2)),
+      usedMb: Number((Math.max(0, swapTotalBytes - swapFreeBytes) / 1024 / 1024).toFixed(2)),
+      freeMb: Number((swapFreeBytes / 1024 / 1024).toFixed(2)),
+      usageRatio:
+        swapTotalBytes > 0
+          ? Number((Math.max(0, swapTotalBytes - swapFreeBytes) / swapTotalBytes).toFixed(4))
+          : 0,
+    },
+    disk: {
+      mount: "/",
+      totalGb: Number((diskTotalBytes / 1024 / 1024 / 1024).toFixed(2)),
+      usedGb: Number((Math.max(0, diskTotalBytes - diskAvailableBytes) / 1024 / 1024 / 1024).toFixed(2)),
+      availableGb: Number((diskAvailableBytes / 1024 / 1024 / 1024).toFixed(2)),
+      usageRatio:
+        diskTotalBytes > 0 ? Number(((diskTotalBytes - diskAvailableBytes) / diskTotalBytes).toFixed(4)) : 0,
+    },
+  };
 }
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
@@ -1283,6 +1412,72 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/ops/critical-alerts/status", async () => {
     const status = await getCriticalAlertQueueStatus();
     return { success: true, data: status };
+  });
+
+  fastify.get("/ops/health", async () => {
+    const [database, gotenberg, queue, hostResources] = await Promise.all([
+      probeDatabase(),
+      probeGotenberg(),
+      getCriticalAlertQueueStatus(),
+      getHostResourceSnapshot(),
+    ]);
+
+    const memoryUsage = process.memoryUsage();
+    const cpuUsage = process.cpuUsage();
+    const uptimeSec = Number(process.uptime().toFixed(2));
+    const queueDegraded = Boolean(queue.sla?.degraded);
+    const queueDown = queue.redisConfigured && !queue.depsInstalled;
+    const hostPressure =
+      hostResources.memory.usageRatio >= 0.9 ||
+      hostResources.swap.usageRatio >= 0.25 ||
+      hostResources.disk.usageRatio >= 0.9;
+
+    const globalStatus =
+      database.status === "down" || queueDown
+        ? "down"
+        : database.status === "degraded" || queueDegraded || gotenberg.status === "degraded" || hostPressure
+          ? "degraded"
+          : "ok";
+
+    return {
+      success: true,
+      data: {
+        status: globalStatus,
+        checkedAt: new Date().toISOString(),
+        checks: {
+          api: {
+            status: "ok",
+            uptimeSec,
+            nodeVersion: process.version,
+            pid: process.pid,
+            memory: {
+              rssMb: Number((memoryUsage.rss / 1024 / 1024).toFixed(2)),
+              heapUsedMb: Number((memoryUsage.heapUsed / 1024 / 1024).toFixed(2)),
+              heapTotalMb: Number((memoryUsage.heapTotal / 1024 / 1024).toFixed(2)),
+              externalMb: Number((memoryUsage.external / 1024 / 1024).toFixed(2)),
+            },
+            cpu: {
+              userMicros: cpuUsage.user,
+              systemMicros: cpuUsage.system,
+              loadAvg: os.loadavg(),
+            },
+            host: hostResources,
+          },
+          database,
+          gotenberg,
+          criticalAlerts: {
+            status: queueDown ? "down" : queueDegraded ? "degraded" : "ok",
+            queueConfigured: queue.queueConfigured,
+            redisConfigured: queue.redisConfigured,
+            depsInstalled: queue.depsInstalled,
+            workerRunning: queue.workerRunning,
+            jobCounts: queue.jobCounts,
+            sla: queue.sla,
+          },
+        },
+        counters: getOpsCountersSnapshot(),
+      },
+    };
   });
 
   fastify.get("/ops/critical-alerts/failed", async (request) => {
@@ -5387,18 +5582,22 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         requestedEngine === "gotenberg" ||
         query.useGotenberg === "1" ||
         query.forceGotenberg === "1";
+      recordPdfRequest(requestWantsGotenberg);
       const shouldUseGotenberg =
         !!gotenbergUrl &&
         (gotenbergMode === "always" || (gotenbergMode !== "disabled" && requestWantsGotenberg));
+      let fallbackToSimpleReason: "gotenberg_busy" | "gotenberg_error" | null = null;
 
       if (shouldUseGotenberg) {
         const maxConcurrent = getGotenbergMaxConcurrent();
         if (activeGotenbergRenders >= maxConcurrent) {
+          fallbackToSimpleReason = "gotenberg_busy";
           fastify.log.warn(
             { maxConcurrent, active: activeGotenbergRenders, quoteId: quote.id },
             "Gotenberg em capacidade máxima; usando fallback PDF simples",
           );
           if (requestWantsGotenberg) {
+            recordPdfHardFailure("gotenberg_busy");
             return reply.status(503).send({
               error: "Gotenberg ocupado no momento. Tente novamente em instantes.",
               code: "gotenberg_busy",
@@ -5437,6 +5636,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
               "Content-Disposition",
               `attachment; filename=orcamento-${quote.id.slice(0, 8)}.pdf`,
             );
+            recordPdfGenerated("gotenberg");
             return reply.send(pdf);
           }
 
@@ -5444,7 +5644,9 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             { statusCode: response.status },
             "Gotenberg respondeu com erro ao gerar PDF do orçamento",
           );
+          fallbackToSimpleReason = "gotenberg_error";
           if (requestWantsGotenberg) {
+            recordPdfHardFailure("gotenberg_http_error");
             return reply.status(502).send({
               error: `Falha no Gotenberg ao gerar PDF (HTTP ${response.status}).`,
               code: "gotenberg_http_error",
@@ -5452,7 +5654,9 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           }
         } catch (error) {
           fastify.log.warn({ error }, "Falha ao gerar PDF do orçamento via Gotenberg");
+          fallbackToSimpleReason = "gotenberg_error";
           if (requestWantsGotenberg) {
+            recordPdfHardFailure("gotenberg_unreachable");
             return reply.status(502).send({
               error: "Falha de comunicação com Gotenberg ao gerar PDF.",
               code: "gotenberg_unreachable",
@@ -5472,9 +5676,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         "Content-Disposition",
         `attachment; filename=orcamento-${quote.id.slice(0, 8)}.pdf`,
       );
+      recordPdfGenerated("simple", fallbackToSimpleReason || undefined);
       return reply.send(pdf);
     } catch (error) {
       fastify.log.error({ error }, "Falha inesperada ao gerar PDF do orçamento");
+      recordPdfHardFailure("pdf_unexpected_error");
       return reply.status(500).send({ error: "Falha ao gerar PDF do orçamento." });
     }
   });

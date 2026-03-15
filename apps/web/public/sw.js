@@ -1,6 +1,7 @@
-const SW_VERSION = "ecoheat-sw-v2";
+const SW_VERSION = "ecoheat-sw-v3";
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const RUNTIME_CACHE = `${SW_VERSION}-runtime`;
+const SYNC_TAG = "ecoheat-sync";
 
 const STATIC_ASSETS = ["/", "/manifest.json", "/icon-192x192.png", "/icon-512x512.png"];
 
@@ -74,5 +75,24 @@ self.addEventListener("fetch", (event) => {
 
       return cached || networkFetch;
     }),
+  );
+});
+
+self.addEventListener("sync", (event) => {
+  if (event.tag !== SYNC_TAG) return;
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ includeUncontrolled: true, type: "window" })
+      .then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: "TRIGGER_SYNC",
+            source: "service_worker_sync",
+            timestamp: Date.now(),
+          });
+        });
+      })
+      .catch(() => undefined),
   );
 });

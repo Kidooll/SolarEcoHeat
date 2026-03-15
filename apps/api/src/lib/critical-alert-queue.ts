@@ -17,6 +17,25 @@ const JOB_NAME = "send-critical-occurrence-alert";
 const REDIS_URL = process.env.BULLMQ_REDIS_URL || process.env.REDIS_URL || "";
 const PUSH_WEBHOOK_URL = process.env.CRITICAL_PUSH_WEBHOOK_URL || "";
 
+function parseEnvInt(name: string, fallback: number, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  const raw = Number(process.env[name]);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(raw)));
+}
+
+function readQueueConfig() {
+  return {
+    addAttempts: parseEnvInt("CRITICAL_ALERT_QUEUE_ATTEMPTS", 3, 1, 10),
+    addBackoffMs: parseEnvInt("CRITICAL_ALERT_QUEUE_BACKOFF_MS", 2000, 250, 120000),
+    removeOnComplete: parseEnvInt("CRITICAL_ALERT_QUEUE_REMOVE_ON_COMPLETE", 100, 10, 5000),
+    removeOnFail: parseEnvInt("CRITICAL_ALERT_QUEUE_REMOVE_ON_FAIL", 100, 10, 5000),
+    workerConcurrency: parseEnvInt("CRITICAL_ALERT_WORKER_CONCURRENCY", 1, 1, 10),
+    // Maximo de jobs por janela de duracao (BullMQ limiter)
+    limiterMax: parseEnvInt("CRITICAL_ALERT_WORKER_RATE_LIMIT_MAX", 30, 1, 10000),
+    limiterDurationMs: parseEnvInt("CRITICAL_ALERT_WORKER_RATE_LIMIT_DURATION_MS", 60000, 1000, 3600000),
+  };
+}
+
 type DynamicDeps = {
   Queue: any;
   Worker: any;
@@ -124,6 +143,7 @@ export function isCriticalAlertQueueEnabled() {
 
 export async function dispatchCriticalOccurrenceAlert(payload: CriticalOccurrenceAlertPayload) {
   metrics.lastDispatchAt = new Date().toISOString();
+  const queueConfig = readQueueConfig();
 
   if (queueConfigured()) {
     try {
@@ -131,13 +151,13 @@ export async function dispatchCriticalOccurrenceAlert(payload: CriticalOccurrenc
         JOB_NAME,
         payload,
         {
-          attempts: 5,
+          attempts: queueConfig.addAttempts,
           backoff: {
             type: "exponential",
-            delay: 2_000,
+            delay: queueConfig.addBackoffMs,
           },
-          removeOnComplete: 100,
-          removeOnFail: 100,
+          removeOnComplete: queueConfig.removeOnComplete,
+          removeOnFail: queueConfig.removeOnFail,
           jobId: payload.occurrenceId,
         },
       );
@@ -189,12 +209,14 @@ export async function dispatchCriticalOccurrenceAlert(payload: CriticalOccurrenc
 }
 
 export async function getCriticalAlertQueueStatus() {
+  const queueConfig = readQueueConfig();
   const base = {
     queueConfigured: queueConfigured(),
     redisConfigured: !!REDIS_URL,
     depsInstalled: !!loadDeps(),
     webhookConfigured: !!PUSH_WEBHOOK_URL,
     workerRunning: !!worker,
+    config: queueConfig,
     metrics,
   };
 
@@ -292,6 +314,7 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
   }
 
   if (worker) return;
+  const queueConfig = readQueueConfig();
 
   worker = new deps.Worker(
     QUEUE_NAME,
@@ -300,7 +323,11 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
     },
     {
       connection: getConnection(),
-      concurrency: 2,
+      concurrency: queueConfig.workerConcurrency,
+      limiter: {
+        max: queueConfig.limiterMax,
+        duration: queueConfig.limiterDurationMs,
+      },
     },
   );
 
@@ -320,7 +347,7 @@ export async function startCriticalOccurrenceAlertWorker(logger: { info: Functio
     );
   });
 
-  logger.info("BullMQ inicializado para push de ocorrências críticas.");
+  logger.info({ queueConfig }, "BullMQ inicializado para push de ocorrências críticas.");
 }
 
 export async function stopCriticalOccurrenceAlertWorker() {

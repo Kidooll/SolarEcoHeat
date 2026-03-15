@@ -12,6 +12,8 @@ export default function SyncPage() {
         isOnline,
         isSyncing,
         progress,
+        scheduledRetryOps,
+        nextRetryAt,
         triggerSync,
         retryOperation,
         deleteOperation
@@ -27,6 +29,8 @@ export default function SyncPage() {
                     errors={errors}
                     isSyncing={isSyncing}
                     progress={progress}
+                    scheduledRetryOps={scheduledRetryOps}
+                    nextRetryAt={nextRetryAt}
                     onRetry={(id) => retryOperation(id)}
                     onDelete={(id) => deleteOperation(id)}
                 />

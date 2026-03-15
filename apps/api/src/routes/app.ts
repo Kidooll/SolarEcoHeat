@@ -20,6 +20,7 @@ import {
   dispatchCriticalOccurrenceAlert,
   isCriticalAlertQueueEnabled,
 } from "../lib/critical-alert-queue";
+import { recordDashboardDegraded, recordDashboardError } from "../lib/ops-observability";
 
 function normalizeSeverity(value: string | null | undefined) {
   const normalized = (value || "").toLowerCase();
@@ -329,6 +330,8 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           },
         });
       } catch (error) {
+        recordDashboardError(error);
+        recordDashboardDegraded();
         fastify.log.error(
           { error, userId: request.user?.id, role, route: "/app/dashboard" },
           "Falha ao carregar dados do dashboard app",

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { initDB, addToSyncQueue } from "@/utils/indexed-db";
+import { scheduleBackgroundSync } from "@/utils/sync-engine";
 import { apiFetch } from "@/lib/api";
 import { getSystemTypeIcon } from "@/lib/system-type";
 
@@ -145,6 +146,7 @@ export function useMaintenance(attendanceId: string) {
                     ...updates
                 }
             });
+            await scheduleBackgroundSync("maintenance_update");
         }
     };
 
