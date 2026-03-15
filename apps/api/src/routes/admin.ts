@@ -5398,6 +5398,12 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             { maxConcurrent, active: activeGotenbergRenders, quoteId: quote.id },
             "Gotenberg em capacidade máxima; usando fallback PDF simples",
           );
+          if (requestWantsGotenberg) {
+            return reply.status(503).send({
+              error: "Gotenberg ocupado no momento. Tente novamente em instantes.",
+              code: "gotenberg_busy",
+            });
+          }
         } else {
           activeGotenbergRenders += 1;
         try {
@@ -5438,8 +5444,20 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             { statusCode: response.status },
             "Gotenberg respondeu com erro ao gerar PDF do orçamento",
           );
+          if (requestWantsGotenberg) {
+            return reply.status(502).send({
+              error: `Falha no Gotenberg ao gerar PDF (HTTP ${response.status}).`,
+              code: "gotenberg_http_error",
+            });
+          }
         } catch (error) {
           fastify.log.warn({ error }, "Falha ao gerar PDF do orçamento via Gotenberg");
+          if (requestWantsGotenberg) {
+            return reply.status(502).send({
+              error: "Falha de comunicação com Gotenberg ao gerar PDF.",
+              code: "gotenberg_unreachable",
+            });
+          }
         } finally {
           activeGotenbergRenders = Math.max(0, activeGotenbergRenders - 1);
         }

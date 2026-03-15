@@ -83,7 +83,16 @@ export default function QuoteDetailPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Erro ao gerar PDF (${response.status})`);
+        let message = `Erro ao gerar PDF (${response.status})`;
+        try {
+          const payload = await response.json();
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Mantém fallback de mensagem padrão quando não houver JSON.
+        }
+        throw new Error(message);
       }
 
       const blob = await response.blob();

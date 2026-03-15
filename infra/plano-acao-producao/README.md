@@ -35,6 +35,10 @@ Este plano consolida o hardening tecnico para producao com foco em:
 - `/api/app` agora bloqueia com `403` quando `role=client` sem `client_id` valido.
 - `/api/reports` tambem bloqueia cliente sem `client_id` e impede cliente de acessar job/download de tipo diferente de `client`.
 
+4. [x] Diagnostico e correcao de fallback silencioso no PDF completo:
+- Quando `renderEngine=gotenberg` e o servico falha/esta ocupado, a API agora responde erro explicito (`502/503`) em vez de retornar PDF simples sem aviso.
+- Frontend passou a exibir mensagem de erro retornada pela API ao gerar PDF.
+
 ## Backlog Priorizado
 
 ### P0 (bloqueia estabilidade/seguranca)
