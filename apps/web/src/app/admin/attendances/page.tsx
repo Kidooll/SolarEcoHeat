@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { apiFetch } from "@/lib/api";
@@ -134,6 +134,9 @@ export default function AdminAttendancesPage() {
   const [formType, setFormType] = useState("preventiva");
   const [formStatus, setFormStatus] = useState("agendado");
   const [formScheduledFor, setFormScheduledFor] = useState(toInputDateTime(new Date().toISOString()));
+  const [showEditContextModal, setShowEditContextModal] = useState(false);
+  const [editContextRow, setEditContextRow] = useState<AttendanceRow | null>(null);
+  const formSectionRef = useRef<HTMLElement | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -236,6 +239,8 @@ export default function AdminAttendancesPage() {
 
   const resetForm = () => {
     setEditingId(null);
+    setShowEditContextModal(false);
+    setEditContextRow(null);
     setFormUnitId("");
     setFormTechnicianId("");
     setFormType("preventiva");
@@ -245,11 +250,20 @@ export default function AdminAttendancesPage() {
 
   const startEdit = (row: AttendanceRow) => {
     setEditingId(row.id);
+    setEditContextRow(row);
+    setShowEditContextModal(true);
     setFormUnitId(row.unitId);
     setFormTechnicianId(row.technicianId);
     setFormType(row.type || "preventiva");
     setFormStatus(row.status || "agendado");
     setFormScheduledFor(toInputDateTime(row.scheduledFor || row.startedAt));
+  };
+
+  const closeEditContextModal = () => {
+    setShowEditContextModal(false);
+    if (formSectionRef.current) {
+      formSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   };
 
   const handleSave = async () => {
@@ -484,7 +498,7 @@ export default function AdminAttendancesPage() {
             {error && <div className="rounded border border-crit/40 bg-crit/10 px-3 py-2 text-sm text-crit">{error}</div>}
             {notice && <div className="rounded border border-brand/40 bg-brand/10 px-3 py-2 text-sm text-brand">{notice}</div>}
 
-            <section className="rounded border border-border bg-surface p-4 space-y-3">
+            <section ref={formSectionRef} id="attendance-form" className="rounded border border-border bg-surface p-4 space-y-3">
               <h2 className="text-[10px] font-mono uppercase tracking-[0.1em] text-text-3">
                 {editingId ? "Editar Atendimento" : "Novo Atendimento"}
               </h2>
@@ -983,6 +997,56 @@ export default function AdminAttendancesPage() {
       </div>
 
       {!useDesktopLayout && <BottomNav role="admin" />}
+
+      {showEditContextModal && editContextRow && (
+        <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/60 p-3 sm:items-center sm:p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-attendance-context-title"
+            className="w-full max-w-lg rounded-xl border border-border bg-surface p-4 shadow-2xl"
+          >
+            <p className="text-[10px] font-mono uppercase tracking-[0.12em] text-brand">Modo de edição</p>
+            <h3 id="edit-attendance-context-title" className="mt-1 text-base font-bold text-text">
+              Você está editando um atendimento existente
+            </h3>
+            <p className="mt-2 text-sm text-text-2">
+              O formulário abaixo foi carregado com os dados de{" "}
+              <span className="font-semibold text-text">{editContextRow.unitName}</span> ({editContextRow.clientName}).
+            </p>
+
+            <div className="mt-3 rounded border border-border bg-surface-2 p-3 text-xs text-text-2">
+              <p>
+                <strong className="text-text">ID:</strong> #{editContextRow.id.slice(0, 8).toUpperCase()}
+              </p>
+              <p>
+                <strong className="text-text">Técnico:</strong> {editContextRow.technicianName}
+              </p>
+              <p>
+                <strong className="text-text">Agendado:</strong>{" "}
+                {editContextRow.scheduledFor ? new Date(editContextRow.scheduledFor).toLocaleString("pt-BR") : "-"}
+              </p>
+            </div>
+
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={resetForm}
+                className="h-10 rounded border border-border px-4 text-sm text-text-2 hover:bg-surface-2"
+              >
+                Voltar para novo
+              </button>
+              <button
+                type="button"
+                onClick={closeEditContextModal}
+                className="h-10 rounded border border-brand bg-brand px-4 text-sm font-bold text-black"
+              >
+                Continuar edição
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -49,6 +49,10 @@ Este plano consolida o hardening tecnico para producao com foco em:
 - `/api/app/dashboard` passou a responder fallback degradado em caso de erro interno, evitando `500` na tela inicial.
 - `/api/app/systems` e rotas relacionadas tiveram correcao de filtro SQL (`ANY(...::uuid[])` -> `inArray`) para eliminar erro Postgres `42846`.
 
+7. [x] Melhoria UX de edicao de atendimentos (Admin):
+- Ao clicar em "Editar", a interface agora abre um modal responsivo de contexto (mobile + desktop) explicando que o formulario entrou em modo de edicao.
+- Modal exibe dados resumidos do atendimento e acao clara para "Continuar edicao" ou "Voltar para novo".
+
 ## Backlog Priorizado
 
 ### P0 (bloqueia estabilidade/seguranca)
