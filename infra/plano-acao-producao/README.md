@@ -47,6 +47,7 @@ Este plano consolida o hardening tecnico para producao com foco em:
 - `sw.js` legado do Workbox foi substituido por Service Worker estavel sem precache de rotas server-side (elimina `bad-precaching-response`).
 - Fluxo do `beforeinstallprompt` ajustado para nao interceptar quando o banner nao sera exibido (reduz warning de banner nao mostrado).
 - `/api/app/dashboard` passou a responder fallback degradado em caso de erro interno, evitando `500` na tela inicial.
+- `/api/app/systems` e rotas relacionadas tiveram correcao de filtro SQL (`ANY(...::uuid[])` -> `inArray`) para eliminar erro Postgres `42846`.
 
 ## Backlog Priorizado
 

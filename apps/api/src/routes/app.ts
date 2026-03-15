@@ -393,7 +393,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           ? await db
               .select({ id: technicalUnits.id, name: technicalUnits.name })
               .from(technicalUnits)
-              .where(sql`${technicalUnits.id} = ANY(${unitIds}::uuid[])`)
+              .where(inArray(technicalUnits.id, unitIds))
           : [];
         const unitsMap = new Map(units.map((unit) => [unit.id, unit.name]));
 
@@ -588,7 +588,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                 state: components.state,
               })
               .from(components)
-              .where(sql`${components.systemId} = ANY(${systemIds}::uuid[])`)
+              .where(inArray(components.systemId, systemIds))
           : [];
 
         const maintenanceMap = new Map(
@@ -1320,7 +1320,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                 systemId: components.systemId,
               })
               .from(components)
-              .where(sql`${components.systemId} = ANY(${systemIds}::uuid[])`)
+              .where(inArray(components.systemId, systemIds))
           : [];
 
         const maintenanceBySystem = new Map(
@@ -1534,7 +1534,7 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
                 technicianId: attendances.technicianId,
               })
               .from(attendances)
-              .where(sql`${attendances.id} = ANY(${attendanceIds}::uuid[])`)
+              .where(inArray(attendances.id, attendanceIds))
           : [];
         const attendanceMap = new Map(attendancesRows.map((row) => [row.id, row]));
 
