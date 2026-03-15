@@ -43,6 +43,11 @@ Este plano consolida o hardening tecnico para producao com foco em:
 - Corrigida incompatibilidade de build entre `next@16` e `next-pwa` removendo o plugin do `next.config` (PWA mantido via assets estaticos em `public/`).
 - Build validado com `next build --webpack` no workspace `@solarecoheat/web`.
 
+6. [x] Correcao de incidente PWA em producao:
+- `sw.js` legado do Workbox foi substituido por Service Worker estavel sem precache de rotas server-side (elimina `bad-precaching-response`).
+- Fluxo do `beforeinstallprompt` ajustado para nao interceptar quando o banner nao sera exibido (reduz warning de banner nao mostrado).
+- `/api/app/dashboard` passou a responder fallback degradado em caso de erro interno, evitando `500` na tela inicial.
+
 ## Backlog Priorizado
 
 ### P0 (bloqueia estabilidade/seguranca)

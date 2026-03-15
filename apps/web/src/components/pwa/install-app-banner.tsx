@@ -35,9 +35,17 @@ export function InstallAppBanner() {
         setDismissed(hidden || standalone);
 
         const handleBeforeInstallPrompt = (event: Event) => {
+            const standaloneNow = isStandaloneMode();
+            const hiddenNow = window.localStorage.getItem("pwa-install-banner-dismissed") === "1";
+
+            // Só intercepta o prompt quando vamos realmente exibir nosso banner customizado.
+            if (standaloneNow || hiddenNow) {
+                return;
+            }
+
             event.preventDefault();
             setInstallEvent(event as BeforeInstallPromptEvent);
-            setDismissed(hidden || standalone ? true : false);
+            setDismissed(false);
         };
 
         const handleInstalled = () => {

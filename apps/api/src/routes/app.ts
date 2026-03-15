@@ -333,7 +333,17 @@ export const appRoutes: FastifyPluginAsync = async (fastify) => {
           { error, userId: request.user?.id, role, route: "/app/dashboard" },
           "Falha ao carregar dados do dashboard app",
         );
-        return reply.code(500).send({ success: false, error: "Erro ao carregar dashboard." });
+        return reply.send({
+          success: true,
+          data: {
+            role,
+            display_name: ((request.user.email || "").split("@")[0] || "tecnico").toUpperCase(),
+            stats: { total: 0, critical: 0, success: 0 },
+            tasks: [],
+            criticalOccurrence: null,
+            degraded: true,
+          },
+        });
       }
     },
   );
