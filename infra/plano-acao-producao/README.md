@@ -39,6 +39,10 @@ Este plano consolida o hardening tecnico para producao com foco em:
 - Quando `renderEngine=gotenberg` e o servico falha/esta ocupado, a API agora responde erro explicito (`502/503`) em vez de retornar PDF simples sem aviso.
 - Frontend passou a exibir mensagem de erro retornada pela API ao gerar PDF.
 
+5. [x] Estabilizacao do build do frontend:
+- Corrigida incompatibilidade de build entre `next@16` e `next-pwa` removendo o plugin do `next.config` (PWA mantido via assets estaticos em `public/`).
+- Build validado com `next build --webpack` no workspace `@solarecoheat/web`.
+
 ## Backlog Priorizado
 
 ### P0 (bloqueia estabilidade/seguranca)

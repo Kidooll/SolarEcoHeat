@@ -1,5 +1,6 @@
 import "@/styles/globals.css";
 import type { Metadata, Viewport } from "next";
+import { ServiceWorkerRegister } from "@/components/pwa/sw-register";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,10 @@ export default function RootLayout({
                     rel="stylesheet"
                 />
             </head>
-            <body>{children}</body>
+            <body>
+                <ServiceWorkerRegister />
+                {children}
+            </body>
         </html>
     );
 }
